@@ -9,7 +9,14 @@
 	"compatibility_date": "2025-07-02",
 	"observability": {
 		"enabled": true
-	}
+	},
+	"ai": {
+		"binding": "AI"
+	},
+	"vars": {
+		"MODEL": "@cf/meta/llama-3-8b-instruct"
+	},
+	"compatibility_flags": ["nodejs_compat"]
 	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
