@@ -1,4 +1,5 @@
 import { evaluate, mean, variance } from "mathjs";
+import DatabaseManager from "./db/index.js";
 
 // HTML table creation helper
 function createHtmlTable(data, columns) {
@@ -125,6 +126,19 @@ function validateSqlQuery(query) {
     }
   }
   
+  // Check if it's a data-modifying query (UPDATE, INSERT, DELETE)
+  const dataModifyingPatterns = [
+    /^\s*update\s+/,
+    /^\s*insert\s+/,
+    /^\s*delete\s+/
+  ];
+  
+  for (const pattern of dataModifyingPatterns) {
+    if (pattern.test(normalizedQuery)) {
+      return { valid: false, requiresApproval: true, error: "Data-modifying query requires approval" };
+    }
+  }
+  
   // For now, only allow SELECT statements
   if (!normalizedQuery.startsWith('select')) {
     return { valid: false, error: "Only SELECT queries are allowed" };
@@ -133,40 +147,32 @@ function validateSqlQuery(query) {
   return { valid: true };
 }
 
-// Execute SQL query against Railway DuckDB endpoint
-async function executeSqlQuery(query) {
+// Execute SQL query using the database manager
+async function executeSqlQuery(query, env = null) {
   console.log('TOOL CALLED: execute_sql with:', query);
   
   const validation = validateSqlQuery(query);
   if (!validation.valid) {
     console.log('TOOL ERROR: Query validation failed:', validation.error);
+    
+    // If it's a data-modifying query, return it for user approval
+    if (validation.requiresApproval) {
+      return { 
+        requiresApproval: true, 
+        query: query.trim(),
+        message: "This query requires user approval before execution" 
+      };
+    }
+    
     return { error: validation.error };
   }
   
   try {
-    const apiUrl = 'https://bun-hono-duckdb-production-e3aa.up.railway.app/query';
-    const apiKey = 'secret123';
+    // Create database manager instance
+    const db = new DatabaseManager(env?.DB || null);
     
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey
-      },
-      body: JSON.stringify({ query })
-    });
-    
-    const result = await response.json();
-    
-    if (!response.ok) {
-      console.log('TOOL ERROR: API request failed:', result);
-      return { error: result.error || 'Failed to execute query' };
-    }
-    
-    console.log('TOOL RESULT: Raw API response:', JSON.stringify(result, null, 2));
-    
-    // The remote API returns data directly as an array, not wrapped in an object
-    const data = Array.isArray(result) ? result : (result.data || result.rows || []);
+    // Execute query (financial data goes to DuckDB)
+    const data = await db.executeFinancialQuery(query);
     const columns = data.length > 0 ? Object.keys(data[0]) : [];
     
     console.log('TOOL RESULT: Processed data:', { dataLength: data.length, columns });
@@ -184,8 +190,33 @@ async function executeSqlQuery(query) {
     };
     
   } catch (err) {
-    console.log('TOOL ERROR: Network or parsing error:', err);
-    return { error: `Network error: ${err.message}` };
+    console.log('TOOL ERROR: Database query error:', err);
+    return { error: `Database error: ${err.message}` };
+  }
+}
+
+// Execute approved SQL query with user approval
+async function executeApprovedSqlQuery(query, env = null) {
+  console.log('TOOL CALLED: execute_approved_sql with:', query);
+  
+  try {
+    // Create database manager instance
+    const db = new DatabaseManager(env?.DB || null);
+    
+    // Execute destructive query (financial data goes to DuckDB)
+    const result = await db.executeFinancialQuery(query);
+    
+    console.log('TOOL RESULT: Raw response:', JSON.stringify(result, null, 2));
+    
+    return {
+      success: true,
+      message: 'Query executed successfully',
+      result: result
+    };
+    
+  } catch (err) {
+    console.log('TOOL ERROR: Database query error:', err);
+    return { error: `Database error: ${err.message}` };
   }
 }
 
@@ -194,61 +225,81 @@ async function executeSqlQuery(query) {
 // Export the markdown to HTML converter for frontend use
 export { markdownTableToHtml };
 
-export const tools = [
-  {
-    name: "evaluate_expression",
-    description: "Evaluate a numeric arithmetic expression",
-    parameters: {
-      type: "object",
-      properties: { expression: { type: "string" } },
-      required: ["expression"]
-    },
-    function: ({ expression }) => {
-      console.log('TOOL CALLED: evaluate_expression with:', expression);
-      try {
-        const result = evaluate(expression);
-        console.log('TOOL RESULT:', result);
-        return { result };
-      } catch (err) {
-        console.log('TOOL ERROR:', err);
-        return { error: String(err) };
-      }
-    }
-  },
-  {
-    name: "check_mean",
-    description: "Arithmetic mean of an array of numbers",
-    parameters: {
-      type: "object",
-      properties: { values: { type: "array", items: { type: "number" } } },
-      required: ["values"]
-    },
-    function: ({ values }) => ({ mean: mean(values) })
-  },
-  {
-    name: "check_variance",
-    description: "Sample variance of an array of numbers",
-    parameters: {
-      type: "object",
-      properties: { values: { type: "array", items: { type: "number" } } },
-      required: ["values"]
-    },
-    function: ({ values }) => ({ variance: variance(values) })
-  },
-  {
-    name: "execute_sql",
-    description: "Execute a SQL SELECT query against the database and return results. This tool is safe to use and should be used to fulfill user requests for data. The database contains tables like FRPAIR, FRPHOLD, FRPSEC, FRPTRAN, and sales with financial data.",
-    parameters: {
-      type: "object",
-      properties: { 
-        query: { 
-          type: "string", 
-          description: "The SQL SELECT query to execute (e.g., 'SELECT * FROM FRPAIR LIMIT 10')" 
-        } 
+// Tool factory function to create tools with environment access
+export function createTools(env = null) {
+  return [
+    {
+      name: "evaluate_expression",
+      description: "Evaluate a numeric arithmetic expression",
+      parameters: {
+        type: "object",
+        properties: { expression: { type: "string" } },
+        required: ["expression"]
       },
-      required: ["query"]
+      function: ({ expression }) => {
+        console.log('TOOL CALLED: evaluate_expression with:', expression);
+        try {
+          const result = evaluate(expression);
+          console.log('TOOL RESULT:', result);
+          return { result };
+        } catch (err) {
+          console.log('TOOL ERROR:', err);
+          return { error: String(err) };
+        }
+      }
     },
-    function: async ({ query }) => await executeSqlQuery(query)
-  },
-  // Schema tool removed - schema is included in system prompt
-];
+    {
+      name: "check_mean",
+      description: "Arithmetic mean of an array of numbers",
+      parameters: {
+        type: "object",
+        properties: { values: { type: "array", items: { type: "number" } } },
+        required: ["values"]
+      },
+      function: ({ values }) => ({ mean: mean(values) })
+    },
+    {
+      name: "check_variance",
+      description: "Sample variance of an array of numbers",
+      parameters: {
+        type: "object",
+        properties: { values: { type: "array", items: { type: "number" } } },
+        required: ["values"]
+      },
+      function: ({ values }) => ({ variance: variance(values) })
+    },
+    {
+      name: "execute_sql",
+      description: "Execute a SQL SELECT query against the database and return results. This tool is safe to use and should be used to fulfill user requests for data. The database contains tables like FRPAIR, FRPHOLD, FRPSEC, FRPTRAN, and sales with financial data.",
+      parameters: {
+        type: "object",
+        properties: { 
+          query: { 
+            type: "string", 
+            description: "The SQL SELECT query to execute (e.g., 'SELECT * FROM FRPAIR LIMIT 10')" 
+          } 
+        },
+        required: ["query"]
+      },
+      function: async ({ query }) => await executeSqlQuery(query, env)
+    },
+    {
+      name: "execute_approved_sql",
+      description: "Execute a data-modifying SQL query (UPDATE, INSERT, DELETE) that has been approved by the user. This tool should only be used when the user has explicitly approved the execution.",
+      parameters: {
+        type: "object",
+        properties: { 
+          query: { 
+            type: "string", 
+            description: "The approved SQL query to execute (e.g., 'UPDATE FRPAIR SET NAME = \"New Name\" WHERE ACCT = \"123\"')" 
+          } 
+        },
+        required: ["query"]
+      },
+      function: async ({ query }) => await executeApprovedSqlQuery(query, env)
+    }
+  ];
+}
+
+// Legacy export for backward compatibility
+export const tools = createTools();

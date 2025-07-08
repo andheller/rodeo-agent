@@ -1,10 +1,15 @@
 import { Agent } from "agents";
 import { runWithTools } from "@cloudflare/ai-utils";
-import { tools } from "./tools.js";
+import { createTools } from "./tools.js";
+import DatabaseManager from "./db/index.js";
+
+// D1 proxy configuration
+const D1_PROXY_API_KEY = 'secret123';
 
 export class MathAgent extends Agent {
   async onMessage(conn, raw) {
     const { prompt } = JSON.parse(raw);
+    const tools = createTools(this.env);
     const systemPrompt = `You are a helpful AI assistant with access to mathematical functions and database querying capabilities. You MUST use the available tools to fulfill user requests.
 
 Available tools:
@@ -87,6 +92,61 @@ async function fetch(request, env) {
     });
   }
   
+  if (url.pathname === "/d1-proxy" && request.method === "POST") {
+    try {
+      // Check API key authentication
+      const apiKey = request.headers.get('x-api-key');
+      if (!apiKey || apiKey !== D1_PROXY_API_KEY) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      
+      const { query, params = [] } = await request.json();
+      
+      if (!query) {
+        return new Response(JSON.stringify({ error: "Missing query" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      // Check if it's a command (INSERT, UPDATE, DELETE) or query (SELECT)
+      const isCommand = query.startsWith('COMMAND:');
+      const actualQuery = isCommand ? query.substring(8) : query;
+      
+      try {
+        const stmt = env.DB.prepare(actualQuery);
+        let result;
+        
+        if (isCommand) {
+          // Use run() for commands
+          result = params.length > 0 ? await stmt.bind(...params).run() : await stmt.run();
+        } else {
+          // Use all() for queries
+          result = params.length > 0 ? await stmt.bind(...params).all() : await stmt.all();
+        }
+        
+        return new Response(JSON.stringify(result), {
+          headers: { "Content-Type": "application/json" }
+        });
+      } catch (dbError) {
+        console.error('D1 proxy database error:', dbError);
+        return new Response(JSON.stringify({ error: `Database error: ${dbError.message}` }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+    } catch (error) {
+      console.error('D1 proxy error:', error);
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  }
+  
   if (url.pathname === "/chat" && request.method === "POST") {
     try {
       const { prompt } = await request.json();
@@ -158,6 +218,9 @@ Your role is to be an analyst, not a data formatter. Provide insights, trends, s
 
       // Track tool usage
       const toolCalls = [];
+      
+      // Create tools with environment access
+      const tools = createTools(env);
       
       // Wrap tools to track usage
       const wrappedTools = tools.map(tool => ({

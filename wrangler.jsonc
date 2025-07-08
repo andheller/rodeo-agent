@@ -16,7 +16,14 @@
 	"vars": {
 		"MODEL": "@cf/meta/llama-3-8b-instruct"
 	},
-	"compatibility_flags": ["nodejs_compat"]
+	"compatibility_flags": ["nodejs_compat"],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "rodeo-agent-db",
+			"database_id": "4265c5ee-b831-45ca-9761-433d7d0cf765"
+		}
+	]
 	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
