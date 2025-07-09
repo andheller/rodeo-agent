@@ -14,9 +14,7 @@
 		"binding": "AI"
 	},
 	"vars": {
-		"MODEL": "@cf/meta/llama-3-8b-instruct",
-		"GEMINI_API_KEY": "your-gemini-api-key-here",
-		"CLAUDE_API_KEY": "your-claude-api-key-here"
+		"MODEL": "@cf/meta/llama-3-8b-instruct"
 	},
 	"compatibility_flags": ["nodejs_compat"],
 	"d1_databases": [
