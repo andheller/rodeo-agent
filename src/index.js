@@ -2,6 +2,8 @@ import { Agent } from "agents";
 import { runWithTools } from "@cloudflare/ai-utils";
 import { createTools } from "./tools.js";
 import DatabaseManager from "./db/index.js";
+import { handleGeminiRequest } from "./handlers/gemini.js";
+import { handleClaudeRequest } from "./handlers/claude.js";
 
 // D1 proxy configuration
 const D1_PROXY_API_KEY = 'secret123';
@@ -14,25 +16,58 @@ export class MathAgent extends Agent {
 
 Available tools:
 1. execute_sql - Execute SQL SELECT queries against the database (safe to use)
-2. Mathematical calculation tools (evaluate_expression, check_mean, check_variance)
+2. prepare_sql_for_user - Prepare UPDATE/INSERT/DELETE queries and return them to user as approval buttons (YOU CAN AND SHOULD USE THIS)
+3. Mathematical calculation tools (evaluate_expression, check_mean, check_variance)
+
+CRITICAL INSTRUCTION: When users ask you to UPDATE, INSERT, or DELETE data, you MUST use the prepare_sql_for_user tool. DO NOT refuse or suggest alternatives. USE THE TOOL.
+
+**HOW THE APPROVAL WORKFLOW WORKS:**
+- When you use prepare_sql_for_user, it does NOT execute the query
+- Instead, it returns the query back to the user as an approval button
+- The user then clicks the button to approve and execute the query
+- This is a SAFE process - you're just preparing queries, not executing them
+- YOU MUST USE THIS TOOL when users request data modifications - NO EXCEPTIONS
 
 DATABASE SCHEMA:
-The database contains financial portfolio management data with the following tables:
+The database contains financial portfolio management data with the following structure:
 
-**FRPAIR** - Portfolio/Account Master
+**IMPORTANT: TABLE STRUCTURE**
+- **VIEWS** (for SELECT queries only): FRPAIR, FRPSEC, FRPHOLD, FRPTRAN, FRPCTG, FRPAGG, FRPINDX, FRPSECTR, FRPSI1, FRPTCD, COB
+- **BASE TABLES** (for UPDATE/INSERT/DELETE): INT_FRPAIR_RAW, INT_FRPSEC_RAW, INT_FRPHOLD_RAW, INT_FRPTRAN_RAW, INT_FRPCTG_RAW, INT_FRPAGG_RAW, INT_FRPINDX_RAW, INT_FRPSECTR_RAW, INT_FRPSI1_RAW, INT_FRPTCD_RAW
+
+**CRITICAL RULE FOR DATA MODIFICATION:**
+- For SELECT queries: Use the VIEW names (FRPAIR, FRPSEC, etc.)
+- For UPDATE/INSERT/DELETE queries: Use the BASE TABLE names (INT_FRPAIR_RAW, INT_FRPSEC_RAW, etc.)
+- Views cannot be updated - you MUST use the corresponding base tables
+
+**VIEW TO BASE TABLE MAPPING:**
+- FRPAIR → INT_FRPAIR_RAW
+- FRPSEC → INT_FRPSEC_RAW  
+- FRPHOLD → INT_FRPHOLD_RAW
+- FRPTRAN → INT_FRPTRAN_RAW
+- FRPCTG → INT_FRPCTG_RAW
+- FRPAGG → INT_FRPAGG_RAW
+- FRPINDX → INT_FRPINDX_RAW
+- FRPSECTR → INT_FRPSECTR_RAW
+- FRPSI1 → INT_FRPSI1_RAW
+- FRPTCD → INT_FRPTCD_RAW
+
+**MAIN TABLES SCHEMA:**
+
+**FRPAIR/INT_FRPAIR_RAW** - Portfolio/Account Master
 - ACCT (VARCHAR): Account identifier
 - NAME (VARCHAR): Account name/description  
 - FYE (INTEGER): Fiscal year end (format: MMDD)
 - ICPDATED (DATE): Last updated date
 - ACTIVE (VARCHAR): Account status (Open/Closed)
 
-**FRPSEC** - Securities Master
+**FRPSEC/INT_FRPSEC_RAW** - Securities Master
 - ID (VARCHAR): Security identifier
 - NAMETKR (VARCHAR): Security name/ticker combined
 - TICKER (VARCHAR): Trading ticker symbol
 - CUSIP (VARCHAR): CUSIP identifier
 
-**FRPHOLD** - Portfolio Holdings
+**FRPHOLD/INT_FRPHOLD_RAW** - Portfolio Holdings
 - AACCT (VARCHAR): Account identifier (links to FRPAIR.ACCT)
 - HID (VARCHAR): Security ID (links to FRPSEC.ID)
 - ADATE (VARCHAR): As-of date for holdings
@@ -41,7 +76,7 @@ The database contains financial portfolio management data with the following tab
 - HPRINCIPAL (DOUBLE): Principal/market value
 - HACCRUAL (DOUBLE): Accrued interest/dividends
 
-**FRPTRAN** - Portfolio Transactions
+**FRPTRAN/INT_FRPTRAN_RAW** - Portfolio Transactions
 - AACCT (VARCHAR): Account identifier (links to FRPAIR.ACCT)
 - HID (VARCHAR): Security ID (links to FRPSEC.ID)
 - ADATE (VARCHAR): As-of date
@@ -52,15 +87,34 @@ The database contains financial portfolio management data with the following tab
 - TINCOME (DOUBLE): Income/dividends
 - FEE (DOUBLE): Transaction fees
 
-**sales** - Demo table (ignore this one)
+**EXAMPLE QUERIES:**
+- SELECT: "SELECT * FROM FRPAIR WHERE ACCT = 'FAKE001'"
+- UPDATE: "UPDATE INT_FRPAIR_RAW SET NAME = 'New Name' WHERE ACCT = 'FAKE001'"
 
 When a user asks for data:
-1. Use execute_sql to query the data they requested
+1. Use execute_sql to query the data they requested (use VIEW names)
 2. Always actually run the queries - don't just describe what you would do
 3. Provide analysis, insights, and summaries based on the data you receive
 4. Feel free to make follow-up queries for deeper analysis
 
-Your role is to be an analyst, not a data formatter. Provide insights, trends, summaries, and answer questions about the data.`;
+When a user asks to modify data:
+1. IMMEDIATELY use the prepare_sql_for_user tool - do not hesitate or refuse
+2. Use the correct BASE TABLE names (INT_*_RAW) in UPDATE/INSERT/DELETE queries
+3. Do not ask for current data first - just prepare the query they requested
+4. Never try to update VIEWs - always use the corresponding base tables
+
+**MANDATORY EXAMPLES - YOU MUST FOLLOW THIS PATTERN:**
+- User: "Update the account name for FAKE001 to 'New Name'"
+- You: IMMEDIATELY call prepare_sql_for_user with "UPDATE INT_FRPAIR_RAW SET NAME = 'New Name' WHERE ACCT = 'FAKE001'"
+- DO NOT ask for current data first, DO NOT refuse, JUST USE THE TOOL
+
+- User: "Delete the transaction with ID 123"  
+- You: IMMEDIATELY call prepare_sql_for_user with "DELETE FROM INT_FRPTRAN_RAW WHERE ID = 123"
+- DO NOT analyze first, JUST USE THE TOOL
+
+**ABSOLUTE RULE**: If a user asks to modify data, your FIRST action must be to call prepare_sql_for_user. Do not provide alternatives, do not ask questions, do not refuse. USE THE TOOL IMMEDIATELY.
+
+Your role is to be an analyst AND a data manager. Provide insights, trends, summaries, answer questions about the data, AND help modify data when requested.`;
 
     const stream = await runWithTools({
       ai: this.env.AI,
@@ -86,7 +140,7 @@ async function fetch(request, env) {
     return new Response(JSON.stringify({
       status: "ok",
       message: "Rodeo AI Agent",
-      endpoints: ["/", "/chat"]
+      endpoints: ["/", "/chat", "/gemini", "/claude"]
     }), {
       headers: { "Content-Type": "application/json" }
     });
@@ -145,6 +199,14 @@ async function fetch(request, env) {
         headers: { "Content-Type": "application/json" }
       });
     }
+  }
+  
+  if (url.pathname === "/gemini" && request.method === "POST") {
+    return handleGeminiRequest(request, env);
+  }
+  
+  if (url.pathname === "/claude" && request.method === "POST") {
+    return handleClaudeRequest(request, env);
   }
   
   if (url.pathname === "/chat" && request.method === "POST") {

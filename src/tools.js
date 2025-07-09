@@ -160,7 +160,7 @@ async function executeSqlQuery(query, env = null) {
       return { 
         requiresApproval: true, 
         query: query.trim(),
-        message: "This query requires user approval before execution" 
+        message: "This query will be prepared for user approval" 
       };
     }
     
@@ -195,15 +195,40 @@ async function executeSqlQuery(query, env = null) {
   }
 }
 
-// Execute approved SQL query with user approval
-async function executeApprovedSqlQuery(query, env = null) {
-  console.log('TOOL CALLED: execute_approved_sql with:', query);
+// Prepare SQL query for user approval
+async function prepareSqlForUser(query, env = null) {
+  console.log('TOOL CALLED: prepare_sql_for_user with:', query);
   
   try {
     // Create database manager instance
     const db = new DatabaseManager(env?.DB || null);
     
     // Execute destructive query (financial data goes to DuckDB)
+    const result = await db.executeFinancialQuery(query);
+    
+    console.log('TOOL RESULT: Raw response:', JSON.stringify(result, null, 2));
+    
+    return {
+      success: true,
+      message: 'Query executed successfully',
+      result: result
+    };
+    
+  } catch (err) {
+    console.log('TOOL ERROR: Database query error:', err);
+    return { error: `Database error: ${err.message}` };
+  }
+}
+
+// Execute user-approved SQL query
+async function executeUserApprovedSql(query, env = null) {
+  console.log('TOOL CALLED: execute_user_approved_sql with:', query);
+  
+  try {
+    // Create database manager instance
+    const db = new DatabaseManager(env?.DB || null);
+    
+    // Execute the approved query (financial data goes to DuckDB)
     const result = await db.executeFinancialQuery(query);
     
     console.log('TOOL RESULT: Raw response:', JSON.stringify(result, null, 2));
@@ -284,19 +309,34 @@ export function createTools(env = null) {
       function: async ({ query }) => await executeSqlQuery(query, env)
     },
     {
-      name: "execute_approved_sql",
-      description: "Execute a data-modifying SQL query (UPDATE, INSERT, DELETE) that has been approved by the user. This tool should only be used when the user has explicitly approved the execution.",
+      name: "prepare_sql_for_user",
+      description: "Prepare a data-modifying SQL query (UPDATE, INSERT, DELETE) and return it to the user for approval. This tool does not execute the query - it returns it as a button for the user to approve and execute.",
       parameters: {
         type: "object",
         properties: { 
           query: { 
             type: "string", 
-            description: "The approved SQL query to execute (e.g., 'UPDATE FRPAIR SET NAME = \"New Name\" WHERE ACCT = \"123\"')" 
+            description: "The SQL query to prepare for user approval (e.g., 'UPDATE INT_FRPAIR_RAW SET NAME = \"New Name\" WHERE ACCT = \"123\"')" 
           } 
         },
         required: ["query"]
       },
-      function: async ({ query }) => await executeApprovedSqlQuery(query, env)
+      function: async ({ query }) => await prepareSqlForUser(query, env)
+    },
+    {
+      name: "execute_user_approved_sql",
+      description: "Execute a SQL query that has been approved by the user. This is only used when the user has clicked the approval button.",
+      parameters: {
+        type: "object",
+        properties: { 
+          query: { 
+            type: "string", 
+            description: "The user-approved SQL query to execute" 
+          } 
+        },
+        required: ["query"]
+      },
+      function: async ({ query }) => await executeUserApprovedSql(query, env)
     }
   ];
 }
