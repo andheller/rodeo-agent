@@ -2,6 +2,29 @@ import { createTools } from "../tools.js";
 
 const CLAUDE_API_URL = "https://api.anthropic.com/v1/messages";
 
+// Convert our tools to Claude API format
+function createClaudeTools(env) {
+  const tools = createTools(env);
+  
+  return tools.map(tool => ({
+    name: tool.name,
+    description: tool.description,
+    input_schema: tool.parameters
+  }));
+}
+
+// Execute a tool by name
+async function executeTool(toolName, input, env) {
+  const tools = createTools(env);
+  const tool = tools.find(t => t.name === toolName);
+  
+  if (!tool) {
+    throw new Error(`Tool ${toolName} not found`);
+  }
+  
+  return await tool.function(input);
+}
+
 export async function handleClaudeRequest(request, env) {
   try {
     const { prompt } = await request.json();
@@ -25,7 +48,7 @@ export async function handleClaudeRequest(request, env) {
     const toolCalls = [];
     
     // Create tools with environment access
-    const tools = createTools(env);
+    const claudeTools = createClaudeTools(env);
     
     // System prompt for Claude
     const systemPrompt = `You are a helpful AI assistant with access to mathematical functions and database querying capabilities. You MUST use the available tools to fulfill user requests.
@@ -73,40 +96,95 @@ The database contains financial portfolio management data with the following tab
 
 Your role is to be an analyst and data manager. Provide insights, trends, summaries, and answer questions about the data.`;
 
-    // For now, we'll make a basic Claude API call without tool support
-    // In production, you'd implement proper Claude tool calling
-    const response = await fetch(CLAUDE_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: "claude-3-haiku-20240307",
-        max_tokens: 1024,
-        system: systemPrompt,
-        messages: [
-          {
-            role: "user",
-            content: prompt
-          }
-        ]
-      })
-    });
+    // Initialize messages array
+    const messages = [
+      {
+        role: "user",
+        content: prompt
+      }
+    ];
 
-    if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error(`Claude API error: ${response.status} - ${errorData}`);
+    let finalResponse = "";
+    let maxIterations = 10; // Prevent infinite loops
+    
+    // Tool calling loop
+    while (maxIterations > 0) {
+      const response = await fetch(CLAUDE_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: "claude-3-haiku-20240307",
+          max_tokens: 1024,
+          system: systemPrompt,
+          tools: claudeTools,
+          messages: messages
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        throw new Error(`Claude API error: ${response.status} - ${errorData}`);
+      }
+
+      const data = await response.json();
+      
+      // Add Claude's response to messages
+      messages.push({
+        role: "assistant",
+        content: data.content
+      });
+
+      // Check if Claude wants to use tools
+      if (data.stop_reason === "tool_use") {
+        // Find tool use blocks
+        const toolUseBlocks = data.content.filter(block => block.type === "tool_use");
+        
+        // Execute each tool
+        const toolResults = [];
+        for (const toolUse of toolUseBlocks) {
+          try {
+            const result = await executeTool(toolUse.name, toolUse.input, env);
+            toolCalls.push({
+              tool: toolUse.name,
+              input: toolUse.input,
+              result: result
+            });
+            
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: toolUse.id,
+              content: JSON.stringify(result)
+            });
+          } catch (error) {
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: toolUse.id,
+              content: JSON.stringify({ error: error.message }),
+              is_error: true
+            });
+          }
+        }
+        
+        // Add tool results to messages
+        messages.push({
+          role: "user",
+          content: toolResults
+        });
+      } else {
+        // No more tools to use, extract final response
+        finalResponse = data.content.find(block => block.type === "text")?.text || "No response generated";
+        break;
+      }
+      
+      maxIterations--;
     }
 
-    const data = await response.json();
-    
-    // Extract the response text from Claude's format
-    const responseText = data.content?.[0]?.text || "No response generated";
-
     return new Response(JSON.stringify({
-      response: responseText,
+      response: finalResponse,
       toolsUsed: toolCalls,
       model: "claude-3-haiku"
     }), {

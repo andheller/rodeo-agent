@@ -1,6 +1,6 @@
 import { createTools } from "../tools.js";
 
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent";
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 
 export async function handleGeminiRequest(request, env) {
   try {
@@ -27,13 +27,15 @@ export async function handleGeminiRequest(request, env) {
     // Create tools with environment access
     const tools = createTools(env);
     
+    // Convert tools to Gemini function declarations
+    const functionDeclarations = tools.map(tool => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters
+    }));
+
     // System prompt for Gemini
     const systemPrompt = `You are a helpful AI assistant with access to mathematical functions and database querying capabilities. You MUST use the available tools to fulfill user requests.
-
-Available tools:
-1. execute_sql - Execute SQL SELECT queries against the database (safe to use)
-2. prepare_sql_for_user - Prepare UPDATE/INSERT/DELETE queries for user approval
-3. Mathematical calculation tools (evaluate_expression, check_mean, check_variance)
 
 DATABASE SCHEMA:
 The database contains financial portfolio management data with the following tables:
@@ -73,23 +75,46 @@ The database contains financial portfolio management data with the following tab
 
 Your role is to be an analyst and data manager. Provide insights, trends, summaries, and answer questions about the data.`;
 
-    // For now, we'll simulate tool execution since Gemini API tool calling is complex
-    // In production, you'd implement proper Gemini function calling
-    const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+    // Function to execute tool calls
+    async function executeFunctionCall(functionCall) {
+      const tool = tools.find(t => t.name === functionCall.name);
+      if (!tool) {
+        return { error: `Unknown function: ${functionCall.name}` };
+      }
+      
+      try {
+        const result = await tool.function(functionCall.args);
+        toolCalls.push({ name: functionCall.name, args: functionCall.args, result });
+        return result;
+      } catch (error) {
+        const errorResult = { error: error.message };
+        toolCalls.push({ name: functionCall.name, args: functionCall.args, result: errorResult });
+        return errorResult;
+      }
+    }
+
+    // Initial conversation history
+    let conversationHistory = [
+      {
+        role: "user",
+        parts: [{ text: prompt }]
+      }
+    ];
+
+    // Make initial request to Gemini
+    let response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: `${systemPrompt}\n\nUser: ${prompt}`
-              }
-            ]
-          }
-        ],
+        contents: conversationHistory,
+        tools: [{
+          functionDeclarations: functionDeclarations
+        }],
+        systemInstruction: {
+          parts: [{ text: systemPrompt }]
+        },
         generationConfig: {
           temperature: 0.7,
           topK: 40,
@@ -103,15 +128,82 @@ Your role is to be an analyst and data manager. Provide insights, trends, summar
       throw new Error(`Gemini API error: ${response.status}`);
     }
 
-    const data = await response.json();
+    let data = await response.json();
+    let finalResponse = "";
     
-    // Extract the response text from Gemini's format
-    const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text || "No response generated";
+    // Handle function calls in a loop
+    while (data.candidates?.[0]?.content?.parts) {
+      const parts = data.candidates[0].content.parts;
+      
+      // Add model response to conversation
+      conversationHistory.push({
+        role: "model",
+        parts: parts
+      });
+      
+      // Check for function calls
+      const functionCalls = parts.filter(part => part.functionCall);
+      
+      if (functionCalls.length > 0) {
+        // Execute function calls
+        const functionResponses = [];
+        
+        for (const functionCall of functionCalls) {
+          const result = await executeFunctionCall(functionCall.functionCall);
+          functionResponses.push({
+            functionResponse: {
+              name: functionCall.functionCall.name,
+              response: result
+            }
+          });
+        }
+        
+        // Add function responses to conversation
+        conversationHistory.push({
+          role: "user",
+          parts: functionResponses
+        });
+        
+        // Continue conversation with function results
+        response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            contents: conversationHistory,
+            tools: [{
+              functionDeclarations: functionDeclarations
+            }],
+            systemInstruction: {
+              parts: [{ text: systemPrompt }]
+            },
+            generationConfig: {
+              temperature: 0.7,
+              topK: 40,
+              topP: 0.95,
+              maxOutputTokens: 1024,
+            }
+          })
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Gemini API error: ${response.status}`);
+        }
+        
+        data = await response.json();
+      } else {
+        // No more function calls, extract final response
+        const textParts = parts.filter(part => part.text);
+        finalResponse = textParts.map(part => part.text).join('');
+        break;
+      }
+    }
 
     return new Response(JSON.stringify({
-      response: responseText,
+      response: finalResponse || "No response generated",
       toolsUsed: toolCalls,
-      model: "gemini-1.5-flash"
+      model: "gemini-2.5-flash"
     }), {
       headers: { "Content-Type": "application/json" }
     });
