@@ -40,74 +40,7 @@ function createHtmlTable(data, columns) {
   return html;
 }
 
-// Create markdown table from data
-function createMarkdownTable(data, columns) {
-  if (!data || data.length === 0) {
-    return 'No data available';
-  }
-  
-  let markdown = '';
-  
-  // Header row
-  markdown += '| ' + columns.join(' | ') + ' |\n';
-  
-  // Separator row
-  markdown += '| ' + columns.map(() => '---').join(' | ') + ' |\n';
-  
-  // Data rows
-  data.forEach(row => {
-    const values = columns.map(col => {
-      const value = row[col] !== null && row[col] !== undefined ? row[col] : '';
-      return String(value).replace(/\|/g, '\\|'); // Escape pipes in data
-    });
-    markdown += '| ' + values.join(' | ') + ' |\n';
-  });
-  
-  return markdown;
-}
 
-// Markdown table to HTML converter
-function markdownTableToHtml(markdownTable) {
-  const lines = markdownTable.trim().split('\n');
-  if (lines.length < 2) return markdownTable; // Not a valid table
-  
-  const headerLine = lines[0];
-  const separatorLine = lines[1];
-  const dataLines = lines.slice(2);
-  
-  // Parse header
-  const headers = headerLine.split('|').map(h => h.trim()).filter(h => h);
-  
-  // Check if it's a valid markdown table
-  if (!separatorLine.includes('---')) return markdownTable;
-  
-  let html = '<table class="markdown-table" style="border-collapse: collapse; width: 100%; margin: 10px 0;">';
-  
-  // Header
-  html += '<thead><tr style="background-color: #f5f5f5;">';
-  headers.forEach(header => {
-    html += `<th style="border: 1px solid #ddd; padding: 8px; text-align: left; font-weight: bold;">${header}</th>`;
-  });
-  html += '</tr></thead>';
-  
-  // Data rows
-  html += '<tbody>';
-  dataLines.forEach((line, index) => {
-    const cells = line.split('|').map(c => c.trim()).filter(c => c);
-    if (cells.length > 0) {
-      const bgColor = index % 2 === 0 ? '#ffffff' : '#f9f9f9';
-      html += `<tr style="background-color: ${bgColor};">`;
-      cells.forEach(cell => {
-        html += `<td style="border: 1px solid #ddd; padding: 8px;">${cell}</td>`;
-      });
-      html += '</tr>';
-    }
-  });
-  html += '</tbody>';
-  
-  html += '</table>';
-  return html;
-}
 
 // SQL Query validation helper
 function validateSqlQuery(query) {
@@ -184,15 +117,11 @@ async function executeSqlQuery(query, env = null) {
     
     console.log('TOOL RESULT: Processed data:', { dataLength: data.length, columns });
     
-    // Create markdown table
-    const markdownTable = createMarkdownTable(data, columns);
-    
     return {
       success: true,
       data: data,
       columns: columns,
       rowCount: data.length,
-      markdownTable: markdownTable,
       message: `Query executed successfully. Retrieved ${data.length} rows.`
     };
     
@@ -330,8 +259,6 @@ function formatEntryContent(entry, truncate = false) {
   return content;
 }
 
-// Export the markdown to HTML converter for frontend use
-export { markdownTableToHtml };
 
 // Tool factory function to create tools with environment access
 export function createTools(env = null, allowedTools = null) {
@@ -378,7 +305,12 @@ export function createTools(env = null, allowedTools = null) {
     },
     {
       name: "execute_sql",
-      description: "Execute a SQL SELECT query against the database and return results. This tool is safe to use and should be used to fulfill user requests for data. The database contains tables like FRPAIR (accounts), FRPHOLD (holdings), FRPSEC (securities), FRPTRAN (transactions), and COB (cash out of balance) with financial data.",
+      description: "Execute a SQL SELECT query against the database and return results. This tool is safe to use and should be used to fulfill user requests for data. The database contains the following tables:\n\n" +
+        "FRPAIR (Accounts): ACCT, NAME, ACTIVE, STATUS\n" +
+        "FRPHOLD (Holdings): AACCT, HID, HUNITS, HPRINCIPAL\n" +
+        "FRPSEC (Securities): ID, TICKER, CUSIP, NAMETKR, ASSETTYPE, CURPRICE\n" +
+        "FRPTRAN (Transactions): AACCT, HID, TDATE, TCODE, TUNITS, TPRINCIPAL, TINCOME\n" +
+        "COB (Cash Out of Balance): account, period_start, period_end, out_of_balance_amount",
       parameters: {
         type: "object",
         properties: { 
