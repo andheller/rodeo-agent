@@ -334,8 +334,8 @@ function formatEntryContent(entry, truncate = false) {
 export { markdownTableToHtml };
 
 // Tool factory function to create tools with environment access
-export function createTools(env = null) {
-  return [
+export function createTools(env = null, allowedTools = null) {
+  const allTools = [
     {
       name: "evaluate_expression",
       description: "Evaluate a numeric arithmetic expression",
@@ -378,7 +378,7 @@ export function createTools(env = null) {
     },
     {
       name: "execute_sql",
-      description: "Execute a SQL SELECT query against the database and return results. This tool is safe to use and should be used to fulfill user requests for data. The database contains tables like FRPAIR, FRPHOLD, FRPSEC, FRPTRAN, and sales with financial data.",
+      description: "Execute a SQL SELECT query against the database and return results. This tool is safe to use and should be used to fulfill user requests for data. The database contains tables like FRPAIR (accounts), FRPHOLD (holdings), FRPSEC (securities), FRPTRAN (transactions), and COB (cash out of balance) with financial data.",
       parameters: {
         type: "object",
         properties: { 
@@ -608,6 +608,13 @@ export function createTools(env = null) {
       }
     }
   ];
+
+  // Filter tools if allowedTools is specified
+  if (allowedTools && Array.isArray(allowedTools)) {
+    return allTools.filter(tool => allowedTools.includes(tool.name));
+  }
+  
+  return allTools;
 }
 
 // Legacy export for backward compatibility
