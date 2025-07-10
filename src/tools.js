@@ -142,12 +142,43 @@ async function prepareSqlForUser(query, env = null) {
       return { error: 'This tool is only for UPDATE, INSERT, or DELETE operations. Use execute_sql for SELECT queries.' };
     }
     
+    // Optional verification step - extract table name and run a quick lookup
+    let verificationInfo = '';
+    try {
+      const db = new DatabaseManager(env?.DB || null);
+      
+      // Extract table name from query for verification
+      const tableMatch = query.match(/(?:UPDATE|DELETE FROM|INSERT INTO)\s+(\w+)/i);
+      if (tableMatch) {
+        const tableName = tableMatch[1];
+        
+        // For UPDATE queries, try to verify the WHERE clause
+        if (trimmedQuery.startsWith('UPDATE')) {
+          const whereMatch = query.match(/WHERE\s+(\w+)\s*=\s*['"](.*?)['"]$/i);
+          if (whereMatch) {
+            const [, column, value] = whereMatch;
+            const verifyQuery = `SELECT COUNT(*) as count FROM ${tableName} WHERE ${column} = '${value}'`;
+            const result = await db.executeFinancialQuery(verifyQuery);
+            const count = result[0]?.count || 0;
+            verificationInfo = `\nVerification: Found ${count} record(s) matching WHERE condition.`;
+          }
+        }
+        
+        // For all queries, verify table structure
+        const structureQuery = `SELECT * FROM ${tableName} LIMIT 1`;
+        await db.executeFinancialQuery(structureQuery);
+        verificationInfo += `\nTable ${tableName} verified and accessible.`;
+      }
+    } catch (verifyErr) {
+      verificationInfo = `\nWarning: Could not verify query - ${verifyErr.message}`;
+    }
+    
     // Return the query for user approval without executing it
     return {
       success: true,
       requiresApproval: true,
       query: query,
-      message: 'Query prepared for approval. Click the button below to execute it.',
+      message: `Query prepared for approval. Click the button below to execute it.${verificationInfo}`,
       approvalButton: {
         text: 'Execute Query',
         query: query
@@ -371,6 +402,7 @@ export function createTools(env = null, allowedTools = null) {
         "- INT_FRPSEC_RAW (Securities): ID, TICKER, CUSIP, NAMETKR, etc.\n" +
         "- INT_FRPTRAN_RAW (Transactions): AACCT, HID, TDATE, TCODE, etc.\n" +
         "- INT_FRPCTG_RAW, INT_FRPINDX_RAW, INT_FRPAGG_RAW, INT_FRPSI1_RAW, INT_FRPTCD_RAW\n\n" +
+        "Important: Use single quotes for string literals (e.g., 'FAKE013', 'Account Name'), not double quotes.\n" +
         "The base tables (FRPAIR, FRPHOLD, FRPSEC, FRPTRAN) are read-only.",
       parameters: {
         type: "object",
