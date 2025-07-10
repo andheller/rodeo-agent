@@ -4,7 +4,7 @@ const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/
 
 export async function handleGeminiRequest(request, env) {
   try {
-    const { prompt } = await request.json();
+    const { prompt, messages = [] } = await request.json();
     
     if (!prompt) {
       return new Response(JSON.stringify({ error: "Missing prompt" }), {
@@ -93,13 +93,32 @@ Your role is to be an analyst and data manager. Provide insights, trends, summar
       }
     }
 
-    // Initial conversation history
-    let conversationHistory = [
-      {
+    // Build conversation history from messages if provided
+    let conversationHistory = [];
+    
+    // Add previous messages if available
+    if (messages.length > 0) {
+      // Convert messages to Gemini format
+      messages.forEach(msg => {
+        if (msg.role === 'user') {
+          conversationHistory.push({
+            role: "user",
+            parts: [{ text: msg.content }]
+          });
+        } else if (msg.role === 'assistant') {
+          conversationHistory.push({
+            role: "model",
+            parts: [{ text: msg.content }]
+          });
+        }
+      });
+    } else {
+      // No history, just add current prompt
+      conversationHistory.push({
         role: "user",
         parts: [{ text: prompt }]
-      }
-    ];
+      });
+    }
 
     // Make initial request to Gemini
     let response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {

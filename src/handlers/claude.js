@@ -27,7 +27,7 @@ async function executeTool(toolName, input, env) {
 
 export async function handleClaudeRequest(request, env) {
   try {
-    const { prompt } = await request.json();
+    const { prompt, messages = [] } = await request.json();
     
     if (!prompt) {
       return new Response(JSON.stringify({ error: "Missing prompt" }), {
@@ -96,13 +96,25 @@ The database contains financial portfolio management data with the following tab
 
 Your role is to be an analyst and data manager. Provide insights, trends, summaries, and answer questions about the data.`;
 
-    // Initialize messages array
-    const messages = [
-      {
-        role: "user",
-        content: prompt
-      }
-    ];
+    // Build messages array from conversation history
+    let claudeMessages = [];
+    
+    // Add previous messages if available
+    if (messages.length > 0) {
+      // Use the provided messages history
+      claudeMessages = messages.map(msg => ({
+        role: msg.role === 'user' ? 'user' : 'assistant',
+        content: msg.content
+      }));
+    } else {
+      // No history, just add current prompt
+      claudeMessages = [
+        {
+          role: "user",
+          content: prompt
+        }
+      ];
+    }
 
     let finalResponse = "";
     let maxIterations = 10; // Prevent infinite loops
@@ -121,7 +133,7 @@ Your role is to be an analyst and data manager. Provide insights, trends, summar
           max_tokens: 1024,
           system: systemPrompt,
           tools: claudeTools,
-          messages: messages
+          messages: claudeMessages
         })
       });
 
@@ -133,7 +145,7 @@ Your role is to be an analyst and data manager. Provide insights, trends, summar
       const data = await response.json();
       
       // Add Claude's response to messages
-      messages.push({
+      claudeMessages.push({
         role: "assistant",
         content: data.content
       });
@@ -170,7 +182,7 @@ Your role is to be an analyst and data manager. Provide insights, trends, summar
         }
         
         // Add tool results to messages
-        messages.push({
+        claudeMessages.push({
           role: "user",
           content: toolResults
         });
