@@ -1,6 +1,13 @@
 import { evaluate, mean, variance } from "mathjs";
 import DatabaseManager from "./db/index.js";
 
+// Load knowledge base data
+import knowledgeBaseData from './knowledge-base-data.js';
+
+function loadKnowledgeBase() {
+  return knowledgeBaseData;
+}
+
 // HTML table creation helper
 function createHtmlTable(data, columns) {
   if (!data || data.length === 0) {
@@ -247,6 +254,82 @@ async function executeUserApprovedSql(query, env = null) {
 
 // Schema tool removed - schema is now included in system prompt
 
+// Knowledge base helper functions
+function searchKnowledgeBase(searchTerm, category = null) {
+  const kb = loadKnowledgeBase();
+  if (!kb) return [];
+
+  const searchTermLower = searchTerm.toLowerCase();
+  const matches = new Set();
+
+  // Search in topics (exact match on file titles)
+  if (kb.searchIndex.topics[searchTermLower]) {
+    kb.searchIndex.topics[searchTermLower].forEach(id => matches.add(id));
+  }
+
+  // Search in terms (content keywords)
+  if (kb.searchIndex.terms[searchTermLower]) {
+    kb.searchIndex.terms[searchTermLower].forEach(id => matches.add(id));
+  }
+
+  // Partial match search in file titles
+  Object.keys(kb.files).forEach(fileId => {
+    const file = kb.files[fileId];
+    if (file.title.toLowerCase().includes(searchTermLower) || 
+        file.id.toLowerCase().includes(searchTermLower)) {
+      matches.add(fileId);
+    }
+  });
+
+  // Filter by category if specified
+  let results = Array.from(matches);
+  if (category) {
+    results = results.filter(id => {
+      const file = kb.files[id];
+      return file.category === category || file.category.includes(category);
+    });
+  }
+
+  return results;
+}
+
+function formatEntryContent(entry, truncate = false) {
+  if (!entry) return '';
+
+  let content = '';
+  
+  if (entry.contentType === 'json') {
+    // Format JSON content (database schema)
+    if (entry.content.document) {
+      content += `**${entry.content.document.title}** (${entry.content.document.version})\n\n`;
+    }
+    
+    if (entry.content.tables) {
+      const tableCount = entry.content.tables.length;
+      content += `Database reference containing ${tableCount} tables:\n\n`;
+      
+      // List first few tables
+      const tablesToShow = truncate ? entry.content.tables.slice(0, 5) : entry.content.tables;
+      tablesToShow.forEach(table => {
+        content += `- **${table.name}**: ${table.description}\n`;
+      });
+      
+      if (truncate && tableCount > 5) {
+        content += `... and ${tableCount - 5} more tables`;
+      }
+    }
+  } else {
+    // Format text content
+    content = entry.content;
+    
+    if (truncate && content.length > 500) {
+      content = content.substring(0, 500) + '...';
+    }
+  }
+  
+  return content;
+}
+
 // Export the markdown to HTML converter for frontend use
 export { markdownTableToHtml };
 
@@ -337,6 +420,192 @@ export function createTools(env = null) {
         required: ["query"]
       },
       function: async ({ query }) => await executeUserApprovedSql(query, env)
+    },
+    {
+      name: "lookup_knowledge_base",
+      description: "Search and retrieve information from the First Rate Performance knowledge base. Use this tool to find definitions, procedures, technical details, and documentation about the First Rate system. You can search for specific terms, browse categories, or get detailed information about topics.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Search term or specific entry ID to look up (e.g., 'benchmark', 'performance calculation', 'FRPAIR')"
+          },
+          category: {
+            type: "string",
+            description: "Optional category to filter search results (e.g., 'terminology', 'performance', 'data_management')"
+          },
+          detailed: {
+            type: "boolean",
+            description: "Whether to return full detailed content (true) or truncated summaries (false). Default is false."
+          }
+        },
+        required: ["query"]
+      },
+      function: ({ query, category = null, detailed = false }) => {
+        console.log('TOOL CALLED: lookup_knowledge_base with:', { query, category, detailed });
+        
+        try {
+          const kb = loadKnowledgeBase();
+          if (!kb) {
+            return { error: 'Knowledge base not available' };
+          }
+
+          // If query looks like a direct ID, try to get it directly
+          if (query && !query.includes(' ') && kb.files[query]) {
+            const entry = kb.files[query];
+            return {
+              success: true,
+              type: 'direct_lookup',
+              entry: {
+                id: entry.id,
+                title: entry.title,
+                category: entry.category,
+                content: formatEntryContent(entry, !detailed)
+              }
+            };
+          }
+
+          // Perform search
+          const matchingIds = searchKnowledgeBase(query, category);
+          
+          if (matchingIds.length === 0) {
+            return {
+              success: true,
+              type: 'no_matches',
+              message: `No knowledge base entries found for "${query}"${category ? ` in category "${category}"` : ''}`,
+              availableCategories: kb.categories.map(cat => ({
+                name: cat.name,
+                displayName: cat.displayName,
+                fileCount: cat.fileCount
+              }))
+            };
+          }
+
+          // Return search results
+          const results = matchingIds.slice(0, 10).map(id => {
+            const entry = kb.files[id];
+            return {
+              id: entry.id,
+              title: entry.title,
+              category: entry.category,
+              content: formatEntryContent(entry, !detailed)
+            };
+          });
+
+          return {
+            success: true,
+            type: 'search_results',
+            query: query,
+            category: category,
+            totalMatches: matchingIds.length,
+            results: results,
+            message: `Found ${matchingIds.length} entries matching "${query}"${category ? ` in category "${category}"` : ''}`
+          };
+
+        } catch (error) {
+          console.error('Knowledge base lookup error:', error);
+          return { error: `Knowledge base lookup failed: ${error.message}` };
+        }
+      }
+    },
+    {
+      name: "get_knowledge_base_categories",
+      description: "Get a list of all available knowledge base categories with their file counts. Use this to understand what types of information are available in the knowledge base.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      },
+      function: () => {
+        console.log('TOOL CALLED: get_knowledge_base_categories');
+        
+        try {
+          const kb = loadKnowledgeBase();
+          if (!kb) {
+            return { error: 'Knowledge base not available' };
+          }
+
+          const categories = kb.categories.map(cat => ({
+            name: cat.name,
+            displayName: cat.displayName,
+            fileCount: cat.fileCount
+          }));
+
+          return {
+            success: true,
+            categories: categories,
+            message: `Available knowledge base categories: ${categories.map(c => c.displayName).join(', ')}`
+          };
+        } catch (error) {
+          console.error('Knowledge base categories error:', error);
+          return { error: `Failed to get categories: ${error.message}` };
+        }
+      }
+    },
+    {
+      name: "browse_knowledge_base_category",
+      description: "Browse all entries in a specific knowledge base category. Use this to explore what information is available in a particular topic area.",
+      parameters: {
+        type: "object",
+        properties: {
+          category: {
+            type: "string",
+            description: "The category to browse (e.g., 'terminology', 'performance', 'data_management')"
+          }
+        },
+        required: ["category"]
+      },
+      function: ({ category }) => {
+        console.log('TOOL CALLED: browse_knowledge_base_category with:', { category });
+        
+        try {
+          const kb = loadKnowledgeBase();
+          if (!kb) {
+            return { error: 'Knowledge base not available' };
+          }
+
+          const categoryData = kb.categories.find(cat => 
+            cat.name === category || cat.displayName.toLowerCase().includes(category.toLowerCase())
+          );
+          
+          if (!categoryData) {
+            return {
+              success: true,
+              type: 'no_entries',
+              message: `No entries found in category "${category}"`,
+              availableCategories: kb.categories.map(cat => ({
+                name: cat.name,
+                displayName: cat.displayName,
+                fileCount: cat.fileCount
+              }))
+            };
+          }
+
+          const results = categoryData.files.map(fileId => {
+            const entry = kb.files[fileId];
+            return {
+              id: entry.id,
+              title: entry.title,
+              category: entry.category,
+              content: formatEntryContent(entry, true) // Always truncate for browsing
+            };
+          });
+
+          return {
+            success: true,
+            type: 'category_browse',
+            category: category,
+            totalEntries: categoryData.files.length,
+            results: results,
+            message: `Found ${categoryData.files.length} entries in category "${categoryData.displayName}"`
+          };
+
+        } catch (error) {
+          console.error('Knowledge base category browse error:', error);
+          return { error: `Failed to browse category: ${error.message}` };
+        }
+      }
     }
   ];
 }
