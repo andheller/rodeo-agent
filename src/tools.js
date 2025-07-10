@@ -136,23 +136,27 @@ async function prepareSqlForUser(query, env = null) {
   console.log('TOOL CALLED: prepare_sql_for_user with:', query);
   
   try {
-    // Create database manager instance
-    const db = new DatabaseManager(env?.DB || null);
+    // Validate that this is a modification query
+    const trimmedQuery = query.trim().toUpperCase();
+    if (!trimmedQuery.startsWith('UPDATE') && !trimmedQuery.startsWith('INSERT') && !trimmedQuery.startsWith('DELETE')) {
+      return { error: 'This tool is only for UPDATE, INSERT, or DELETE operations. Use execute_sql for SELECT queries.' };
+    }
     
-    // Execute destructive query (financial data goes to DuckDB)
-    const result = await db.executeFinancialQuery(query);
-    
-    console.log('TOOL RESULT: Raw response:', JSON.stringify(result, null, 2));
-    
+    // Return the query for user approval without executing it
     return {
       success: true,
-      message: 'Query executed successfully',
-      result: result
+      requiresApproval: true,
+      query: query,
+      message: 'Query prepared for approval. Click the button below to execute it.',
+      approvalButton: {
+        text: 'Execute Query',
+        query: query
+      }
     };
     
   } catch (err) {
-    console.log('TOOL ERROR: Database query error:', err);
-    return { error: `Database error: ${err.message}` };
+    console.log('TOOL ERROR: Prepare query error:', err);
+    return { error: `Error preparing query: ${err.message}` };
   }
 }
 
@@ -344,7 +348,8 @@ export function createTools(env = null, allowedTools = null) {
         "FRPHOLD (Holdings): AACCT, HID, HUNITS, HPRINCIPAL\n" +
         "FRPSEC (Securities): ID, TICKER, CUSIP, NAMETKR, ASSETTYPE, CURPRICE\n" +
         "FRPTRAN (Transactions): AACCT, HID, TDATE, TCODE, TUNITS, TPRINCIPAL, TINCOME\n" +
-        "COB (Cash Out of Balance): account, period_start, period_end, out_of_balance_amount",
+        "COB (Cash Out of Balance): account, period_start, period_end, out_of_balance_amount\n\n" +
+        "Note: Modifiable versions exist as INT_*_RAW tables (e.g., INT_FRPAIR_RAW, INT_FRPHOLD_RAW) which contain the same structure but allow modifications.",
       parameters: {
         type: "object",
         properties: { 
@@ -359,7 +364,14 @@ export function createTools(env = null, allowedTools = null) {
     },
     {
       name: "prepare_sql_for_user",
-      description: "Prepare a data-modifying SQL query (UPDATE, INSERT, or DELETE operations) and return it to the user for approval. This tool does not execute the query - it returns it as a button for the user to approve and execute. Use this for any operations that modify database content.",
+      description: "Prepare a data-modifying SQL query (UPDATE, INSERT, or DELETE operations) and return it to the user for approval. This tool does not execute the query - it returns it as a button for the user to approve and execute. Use this for any operations that modify database content.\n\n" +
+        "Modifiable tables (use these for INSERT/UPDATE/DELETE):\n" +
+        "- INT_FRPAIR_RAW (Accounts): ACCT, NAME, ACTIVE, STATUS, etc.\n" +
+        "- INT_FRPHOLD_RAW (Holdings): AACCT, HID, HUNITS, HPRINCIPAL, etc.\n" +
+        "- INT_FRPSEC_RAW (Securities): ID, TICKER, CUSIP, NAMETKR, etc.\n" +
+        "- INT_FRPTRAN_RAW (Transactions): AACCT, HID, TDATE, TCODE, etc.\n" +
+        "- INT_FRPCTG_RAW, INT_FRPINDX_RAW, INT_FRPAGG_RAW, INT_FRPSI1_RAW, INT_FRPTCD_RAW\n\n" +
+        "The base tables (FRPAIR, FRPHOLD, FRPSEC, FRPTRAN) are read-only.",
       parameters: {
         type: "object",
         properties: { 
