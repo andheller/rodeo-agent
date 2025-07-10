@@ -190,28 +190,82 @@ function searchKnowledgeBase(searchTerm, category = null) {
 
   const searchTermLower = searchTerm.toLowerCase();
   const matches = new Set();
+  const ranked = { exact: [], partial: [], content: [] };
 
-  // Search in topics (exact match on file titles)
+  // 1. Search in topics (exact match on file titles) - highest priority
   if (kb.searchIndex.topics[searchTermLower]) {
-    kb.searchIndex.topics[searchTermLower].forEach(id => matches.add(id));
+    kb.searchIndex.topics[searchTermLower].forEach(id => {
+      matches.add(id);
+      ranked.exact.push(id);
+    });
   }
 
-  // Search in terms (content keywords)
+  // 2. Search in terms (content keywords) - high priority
   if (kb.searchIndex.terms[searchTermLower]) {
-    kb.searchIndex.terms[searchTermLower].forEach(id => matches.add(id));
+    kb.searchIndex.terms[searchTermLower].forEach(id => {
+      if (!matches.has(id)) {
+        matches.add(id);
+        ranked.exact.push(id);
+      }
+    });
   }
 
-  // Partial match search in file titles
+  // 3. Partial match search in file titles - medium priority
   Object.keys(kb.files).forEach(fileId => {
     const file = kb.files[fileId];
-    if (file.title.toLowerCase().includes(searchTermLower) || 
-        file.id.toLowerCase().includes(searchTermLower)) {
+    if ((file.title.toLowerCase().includes(searchTermLower) || 
+         file.id.toLowerCase().includes(searchTermLower)) && 
+        !matches.has(fileId)) {
       matches.add(fileId);
+      ranked.partial.push(fileId);
     }
   });
 
+  // 4. Regex search capability - check if search term looks like regex
+  let isRegexSearch = false;
+  let regexPattern = null;
+  if (searchTerm.includes('*') || searchTerm.includes('\\') || searchTerm.includes('[') || searchTerm.includes('^') || searchTerm.includes('$')) {
+    try {
+      // Convert simple wildcards to regex if needed
+      let pattern = searchTerm.replace(/\*/g, '.*');
+      regexPattern = new RegExp(pattern, 'i');
+      isRegexSearch = true;
+    } catch (e) {
+      // Invalid regex, fall back to normal search
+    }
+  }
+
+  // 5. Full-text content search (including regex) - lower priority
+  if (matches.size === 0 || isRegexSearch) {
+    Object.keys(kb.files).forEach(fileId => {
+      const file = kb.files[fileId];
+      let contentToSearch = '';
+      
+      if (file.contentType === 'json' && file.content.tables) {
+        // Search JSON content
+        contentToSearch = file.content.tables.map(t => `${t.name} ${t.description}`).join(' ');
+      } else if (typeof file.content === 'string') {
+        contentToSearch = file.content;
+      }
+      
+      contentToSearch = contentToSearch.toLowerCase();
+      
+      let found = false;
+      if (isRegexSearch && regexPattern) {
+        found = regexPattern.test(contentToSearch) || regexPattern.test(file.title) || regexPattern.test(file.id);
+      } else {
+        found = contentToSearch.includes(searchTermLower);
+      }
+      
+      if (found && !matches.has(fileId)) {
+        matches.add(fileId);
+        ranked.content.push(fileId);
+      }
+    });
+  }
+
   // Filter by category if specified
-  let results = Array.from(matches);
+  let results = [...ranked.exact, ...ranked.partial, ...ranked.content];
   if (category) {
     results = results.filter(id => {
       const file = kb.files[id];
@@ -284,26 +338,6 @@ export function createTools(env = null, allowedTools = null) {
       }
     },
     {
-      name: "check_mean",
-      description: "Arithmetic mean of an array of numbers",
-      parameters: {
-        type: "object",
-        properties: { values: { type: "array", items: { type: "number" } } },
-        required: ["values"]
-      },
-      function: ({ values }) => ({ mean: mean(values) })
-    },
-    {
-      name: "check_variance",
-      description: "Sample variance of an array of numbers",
-      parameters: {
-        type: "object",
-        properties: { values: { type: "array", items: { type: "number" } } },
-        required: ["values"]
-      },
-      function: ({ values }) => ({ variance: variance(values) })
-    },
-    {
       name: "execute_sql",
       description: "Execute a SQL SELECT query against the database and return results. This tool is safe to use and should be used to fulfill user requests for data. The database contains the following tables:\n\n" +
         "FRPAIR (Accounts): ACCT, NAME, ACTIVE, STATUS\n" +
@@ -325,7 +359,7 @@ export function createTools(env = null, allowedTools = null) {
     },
     {
       name: "prepare_sql_for_user",
-      description: "Prepare a data-modifying SQL query (UPDATE, INSERT, DELETE) and return it to the user for approval. This tool does not execute the query - it returns it as a button for the user to approve and execute.",
+      description: "Prepare a data-modifying SQL query (UPDATE, INSERT, or DELETE operations) and return it to the user for approval. This tool does not execute the query - it returns it as a button for the user to approve and execute. Use this for any operations that modify database content.",
       parameters: {
         type: "object",
         properties: { 
@@ -355,7 +389,7 @@ export function createTools(env = null, allowedTools = null) {
     },
     {
       name: "lookup_knowledge_base",
-      description: "Search and retrieve information from the First Rate Performance knowledge base. Use this tool to find definitions, procedures, technical details, and documentation about the First Rate system. You can search for specific terms, browse categories, or get detailed information about topics.",
+      description: "Search and retrieve information from the First Rate Performance knowledge base. Use this tool to find definitions, procedures, technical details, and documentation about the First Rate system. Supports exact term matching, partial text search, regex patterns (using * wildcards or regex syntax), and full-text content search as fallback.",
       parameters: {
         type: "object",
         properties: {
