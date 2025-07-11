@@ -148,7 +148,7 @@ Your role is to be an analyst and data manager. Provide insights, trends, summar
         },
         body: JSON.stringify({
           model: "claude-3-haiku-20240307",
-          max_tokens: 1024,
+          max_tokens: 2048,
           system: systemPrompt,
           tools: claudeTools,
           messages: claudeMessages
