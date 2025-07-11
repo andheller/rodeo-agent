@@ -227,39 +227,44 @@ function searchKnowledgeBase(searchTerm, category = null) {
   const matches = new Set();
   const ranked = { exact: [], partial: [], content: [] };
 
-  // 1. Search in topics (exact match on file titles) - highest priority
-  if (kb.searchIndex.topics[searchTermLower]) {
+  // 1. Search in topics - add null checks and category filtering
+  if (kb.searchIndex?.topics?.[searchTermLower]) {
     kb.searchIndex.topics[searchTermLower].forEach(id => {
-      matches.add(id);
-      ranked.exact.push(id);
-    });
-  }
-
-  // 2. Search in terms (content keywords) - high priority
-  if (kb.searchIndex.terms[searchTermLower]) {
-    kb.searchIndex.terms[searchTermLower].forEach(id => {
-      if (!matches.has(id)) {
+      if (kb.files[id] && (!category || kb.files[id].category === category)) {
         matches.add(id);
         ranked.exact.push(id);
       }
     });
   }
 
-  // 3. Partial match search in file titles - medium priority
-  Object.keys(kb.files).forEach(fileId => {
-    const file = kb.files[fileId];
-    if ((file.title.toLowerCase().includes(searchTermLower) || 
-         file.id.toLowerCase().includes(searchTermLower)) && 
-        !matches.has(fileId)) {
-      matches.add(fileId);
-      ranked.partial.push(fileId);
-    }
-  });
+  // 2. Search in terms - add null checks and category filtering
+  if (kb.searchIndex?.terms?.[searchTermLower]) {
+    kb.searchIndex.terms[searchTermLower].forEach(id => {
+      if (kb.files[id] && !matches.has(id) && (!category || kb.files[id].category === category)) {
+        matches.add(id);
+        ranked.exact.push(id);
+      }
+    });
+  }
 
-  // 4. Regex search capability - check if search term looks like regex
+  // Only continue searching if we haven't found enough results
+  if (matches.size < 5) {
+    // 3. Partial match search in file titles - medium priority
+    Object.keys(kb.files).forEach(fileId => {
+      const file = kb.files[fileId];
+      if (file && (file.title.toLowerCase().includes(searchTermLower) || 
+           file.id.toLowerCase().includes(searchTermLower)) && 
+          !matches.has(fileId) && (!category || file.category === category)) {
+        matches.add(fileId);
+        ranked.partial.push(fileId);
+      }
+    });
+  }
+
+  // 4. Regex search capability - fix regex detection
   let isRegexSearch = false;
   let regexPattern = null;
-  if (searchTerm.includes('*') || searchTerm.includes('\\') || searchTerm.includes('[') || searchTerm.includes('^') || searchTerm.includes('$')) {
+  if (searchTerm.includes('*') || searchTerm.includes('\\\\') || searchTerm.includes('[') || searchTerm.includes('^') || searchTerm.includes('$')) {
     try {
       // Convert simple wildcards to regex if needed
       let pattern = searchTerm.replace(/\*/g, '.*');
@@ -274,11 +279,15 @@ function searchKnowledgeBase(searchTerm, category = null) {
   if (matches.size === 0 || isRegexSearch) {
     Object.keys(kb.files).forEach(fileId => {
       const file = kb.files[fileId];
+      if (!file || matches.has(fileId) || (category && file.category !== category)) {
+        return;
+      }
+      
       let contentToSearch = '';
       
-      if (file.contentType === 'json' && file.content.tables) {
-        // Search JSON content
-        contentToSearch = file.content.tables.map(t => `${t.name} ${t.description}`).join(' ');
+      if (file.contentType === 'json' && file.content?.tables) {
+        // Search JSON content with null checks
+        contentToSearch = file.content.tables.map(t => `${t.name || ''} ${t.description || ''}`).join(' ');
       } else if (typeof file.content === 'string') {
         contentToSearch = file.content;
       }
@@ -292,23 +301,14 @@ function searchKnowledgeBase(searchTerm, category = null) {
         found = contentToSearch.includes(searchTermLower);
       }
       
-      if (found && !matches.has(fileId)) {
+      if (found) {
         matches.add(fileId);
         ranked.content.push(fileId);
       }
     });
   }
 
-  // Filter by category if specified
-  let results = [...ranked.exact, ...ranked.partial, ...ranked.content];
-  if (category) {
-    results = results.filter(id => {
-      const file = kb.files[id];
-      return file.category === category || file.category.includes(category);
-    });
-  }
-
-  return results;
+  return [...ranked.exact, ...ranked.partial, ...ranked.content];
 }
 
 function formatEntryContent(entry, truncate = false) {
@@ -316,20 +316,21 @@ function formatEntryContent(entry, truncate = false) {
 
   let content = '';
   
-  if (entry.contentType === 'json') {
-    // Format JSON content (database schema)
-    if (entry.content.document) {
-      content += `**${entry.content.document.title}** (${entry.content.document.version})\n\n`;
+  if (entry.contentType === 'json' && entry.content) {
+    // Add null checks for JSON content
+    if (entry.content.document?.title) {
+      const version = entry.content.document.version || 'Unknown version';
+      content += `**${entry.content.document.title}** (${version})\n\n`;
     }
     
-    if (entry.content.tables) {
+    if (entry.content.tables?.length) {
       const tableCount = entry.content.tables.length;
       content += `Database reference containing ${tableCount} tables:\n\n`;
       
-      // List first few tables
       const tablesToShow = truncate ? entry.content.tables.slice(0, 5) : entry.content.tables;
       tablesToShow.forEach(table => {
-        content += `- **${table.name}**: ${table.description}\n`;
+        const description = table.description || 'No description';
+        content += `- **${table.name}**: ${description}\n`;
       });
       
       if (truncate && tableCount > 5) {
@@ -337,8 +338,12 @@ function formatEntryContent(entry, truncate = false) {
       }
     }
   } else {
-    // Format text content
-    content = entry.content;
+    // Safely handle text content
+    const textContent = typeof entry.content === 'string' ? entry.content : 
+                       typeof entry.content === 'object' ? JSON.stringify(entry.content) : 
+                       String(entry.content || '');
+    
+    content = textContent;
     
     if (truncate && content.length > 500) {
       content = content.substring(0, 500) + '...';
@@ -555,7 +560,7 @@ export function createTools(env = null, allowedTools = null) {
     },
     {
       name: "browse_knowledge_base_category",
-      description: "Browse all entries in a specific knowledge base category. Use this to explore what information is available in a particular topic area.",
+      description: "Browse all entries in a specific knowledge base category. Matches category names exactly or by display name. Use get_knowledge_base_categories first to see available options.",
       parameters: {
         type: "object",
         properties: {
@@ -575,8 +580,11 @@ export function createTools(env = null, allowedTools = null) {
             return { error: 'Knowledge base not available' };
           }
 
+          // More precise category matching
           const categoryData = kb.categories.find(cat => 
-            cat.name === category || cat.displayName.toLowerCase().includes(category.toLowerCase())
+            cat.name === category || 
+            cat.name.toLowerCase() === category.toLowerCase() ||
+            cat.displayName.toLowerCase() === category.toLowerCase()
           );
           
           if (!categoryData) {
@@ -592,23 +600,26 @@ export function createTools(env = null, allowedTools = null) {
             };
           }
 
-          const results = categoryData.files.map(fileId => {
-            const entry = kb.files[fileId];
-            return {
-              id: entry.id,
-              title: entry.title,
-              category: entry.category,
-              content: formatEntryContent(entry, true) // Always truncate for browsing
-            };
-          });
+          // Add null checks for file access
+          const results = categoryData.files
+            .filter(fileId => kb.files[fileId]) // Filter out missing files
+            .map(fileId => {
+              const entry = kb.files[fileId];
+              return {
+                id: entry.id,
+                title: entry.title,
+                category: entry.category,
+                content: formatEntryContent(entry, true) // Always truncate for browsing
+              };
+            });
 
           return {
             success: true,
             type: 'category_browse',
             category: category,
-            totalEntries: categoryData.files.length,
+            totalEntries: results.length,
             results: results,
-            message: `Found ${categoryData.files.length} entries in category "${categoryData.displayName}"`
+            message: `Found ${results.length} entries in category "${categoryData.displayName}"`
           };
 
         } catch (error) {
