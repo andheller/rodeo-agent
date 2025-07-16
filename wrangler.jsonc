@@ -23,6 +23,12 @@
 			"database_name": "rodeo-agent-db",
 			"database_id": "4265c5ee-b831-45ca-9761-433d7d0cf765"
 		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "R2",
+			"bucket_name": "rodeo-files"
+		}
 	]
 	/**
 	 * Smart Placement
