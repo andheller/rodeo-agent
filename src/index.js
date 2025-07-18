@@ -445,6 +445,10 @@ async function fetch(request, env) {
     return handleGroqRequest(request, env);
   }
   
+  if (url.pathname === "/api/groq" && request.method === "POST") {
+    return handleGroqRequest(request, env);
+  }
+  
   if (url.pathname === "/chat" && request.method === "POST") {
     try {
       const { prompt } = await request.json();
