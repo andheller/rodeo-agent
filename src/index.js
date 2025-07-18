@@ -4,6 +4,7 @@ import { createTools } from "./tools.js";
 import DatabaseManager from "./db/index.js";
 import { handleGeminiRequest } from "./handlers/gemini.js";
 import { handleClaudeRequest } from "./handlers/claude.js";
+import { handleGroqRequest } from "./handlers/groq.js";
 
 // D1 proxy configuration
 const D1_PROXY_API_KEY = 'secret123';
@@ -140,7 +141,7 @@ async function fetch(request, env) {
     return new Response(JSON.stringify({
       status: "ok",
       message: "Rodeo AI Agent",
-      endpoints: ["/", "/chat", "/gemini", "/claude", "/files/upload", "/files", "/files/{id}"]
+      endpoints: ["/", "/chat", "/gemini", "/claude", "/groq", "/files/upload", "/files", "/files/{id}"]
     }), {
       headers: { "Content-Type": "application/json" }
     });
@@ -438,6 +439,10 @@ async function fetch(request, env) {
   
   if (url.pathname === "/claude" && request.method === "POST") {
     return handleClaudeRequest(request, env);
+  }
+  
+  if (url.pathname === "/groq" && request.method === "POST") {
+    return handleGroqRequest(request, env);
   }
   
   if (url.pathname === "/chat" && request.method === "POST") {
