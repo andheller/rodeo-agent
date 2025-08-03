@@ -5,7 +5,7 @@ class DatabaseManager {
   constructor(d1Database = null, duckdbConfig = null) {
     this.d1 = d1Database;
     this.duckdb = duckdbConfig || {
-      url: 'https://bun-hono-duckdb-production-e3aa.up.railway.app/query',
+      url: 'https://frai-duckdb-api-production.up.railway.app/query',
       apiKey: 'secret123'
     };
   }
@@ -35,7 +35,7 @@ class DatabaseManager {
           'Content-Type': 'application/json',
           'x-api-key': this.duckdb.apiKey
         },
-        body: JSON.stringify({ query })
+        body: JSON.stringify({ sql: query, source: 'duckdb' })
       });
 
       if (!response.ok) {
