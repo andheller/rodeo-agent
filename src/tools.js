@@ -379,13 +379,15 @@ export function createTools(env = null, allowedTools = null) {
     },
     {
       name: "execute_sql",
-      description: "Execute a SQL SELECT query against the database and return results. This tool is safe to use and should be used to fulfill user requests for data. The database contains the following tables:\n\n" +
-        "FRPAIR (Accounts): ACCT, NAME, ACTIVE, STATUS\n" +
-        "FRPHOLD (Holdings): AACCT, HID, HUNITS, HPRINCIPAL\n" +
-        "FRPSEC (Securities): ID, TICKER, CUSIP, NAMETKR, ASSETTYPE, CURPRICE\n" +
-        "FRPTRAN (Transactions): AACCT, HID, TDATE, TCODE, TUNITS, TPRINCIPAL, TINCOME\n" +
-        "COB (Cash Out of Balance): account, period_start, period_end, out_of_balance_amount\n\n" +
-        "Note: Modifiable versions exist as INT_*_RAW tables (e.g., INT_FRPAIR_RAW, INT_FRPHOLD_RAW) which contain the same structure but allow modifications.",
+      description: "Execute a SQL SELECT query against the DuckDB database and return results. This tool is safe to use and should be used to fulfill user requests for data. The database contains the following tables:\n\n" +
+        "Available Tables: frpagg, frpair, frpctg, frphold, frpindx, frpsec, frpsi1, frptcd, frptran\n\n" +
+        "Key Tables:\n" +
+        "- frpair (Accounts): ACCT, NAME, STATUS, ACTIVE, FYE, etc.\n" +
+        "- frphold (Holdings): AACCT, ADATE, HID, HUNITS, HPRINCIPAL, HACCRUAL, etc.\n" +
+        "- frpsec (Securities): ID, TICKER, CUSIP, NAMETKR, ASSETTYPE, CURPRICE, etc.\n" +
+        "- frptran (Transactions): Transaction data\n" +
+        "- frpindx (Index Data): INDX, IDATE, IPRICE, IINC, IRET\n\n" +
+        "Note: All tables support both SELECT and UPDATE/INSERT/DELETE operations.",
       parameters: {
         type: "object",
         properties: { 
@@ -401,14 +403,14 @@ export function createTools(env = null, allowedTools = null) {
     {
       name: "prepare_sql_for_user",
       description: "Prepare a data-modifying SQL query (UPDATE, INSERT, or DELETE operations) and return it to the user for approval. This tool does not execute the query - it returns it as a button for the user to approve and execute. Use this for any operations that modify database content.\n\n" +
-        "Modifiable tables (use these for INSERT/UPDATE/DELETE):\n" +
-        "- INT_FRPAIR_RAW (Accounts): ACCT, NAME, ACTIVE, STATUS, etc.\n" +
-        "- INT_FRPHOLD_RAW (Holdings): AACCT, HID, HUNITS, HPRINCIPAL, etc.\n" +
-        "- INT_FRPSEC_RAW (Securities): ID, TICKER, CUSIP, NAMETKR, etc.\n" +
-        "- INT_FRPTRAN_RAW (Transactions): AACCT, HID, TDATE, TCODE, etc.\n" +
-        "- INT_FRPCTG_RAW, INT_FRPINDX_RAW, INT_FRPAGG_RAW, INT_FRPSI1_RAW, INT_FRPTCD_RAW\n\n" +
-        "Important: Use single quotes for string literals (e.g., 'FAKE013', 'Account Name'), not double quotes.\n" +
-        "The base tables (FRPAIR, FRPHOLD, FRPSEC, FRPTRAN) are read-only.",
+        "Available tables for modification:\n" +
+        "- frpair (Accounts): ACCT, NAME, STATUS, ACTIVE, FYE, etc.\n" +
+        "- frphold (Holdings): AACCT, ADATE, HID, HUNITS, HPRINCIPAL, HACCRUAL, etc.\n" +
+        "- frpsec (Securities): ID, TICKER, CUSIP, NAMETKR, ASSETTYPE, CURPRICE, etc.\n" +
+        "- frptran (Transactions): Transaction data\n" +
+        "- frpindx (Index Data): INDX, IDATE, IPRICE, IINC, IRET\n" +
+        "- frpagg, frpctg, frpsi1, frptcd (Additional financial data tables)\n\n" +
+        "Important: Use single quotes for string literals (e.g., 'FAKE013', 'Account Name'), not double quotes.",
       parameters: {
         type: "object",
         properties: { 
