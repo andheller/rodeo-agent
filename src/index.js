@@ -584,6 +584,19 @@ Your role is to be an analyst, not a data formatter. Provide insights, trends, s
         };
       });
 
+      console.log(`[CHAT] Using provider: ${provider || 'anthropic'}`);
+      console.log(`[CHAT] Model:`, getModel(env, provider || 'anthropic'));
+      
+      // Check API keys
+      const selectedProvider = provider || 'anthropic';
+      if (selectedProvider === 'anthropic' || selectedProvider === 'claude') {
+        console.log(`[CHAT] ANTHROPIC_API_KEY available:`, !!env.ANTHROPIC_API_KEY);
+      } else if (selectedProvider === 'groq') {
+        console.log(`[CHAT] GROQ_API_KEY available:`, !!env.GROQ_API_KEY);
+      } else if (selectedProvider === 'openai') {
+        console.log(`[CHAT] OPENAI_API_KEY available:`, !!env.OPENAI_API_KEY);
+      }
+      
       const result = await streamText({
         model: getModel(env, provider || 'anthropic'),
         system: systemPrompt,
@@ -593,57 +606,30 @@ Your role is to be an analyst, not a data formatter. Provide insights, trends, s
         tools: wrappedTools,
         maxSteps: 5
       });
-
-      // Create SSE response like /stream endpoint
-      const encoder = new TextEncoder();
-      let fullAssistantResponse = '';
       
-      const stream = new ReadableStream({
-        async start(controller) {
-          // Send conversation ID first
-          const initData = `data: ${JSON.stringify({ type: 'conversation_id', conversationId: finalConversationId })}\\n\\n`;
-          controller.enqueue(encoder.encode(initData));
-          
-          // Send text chunks and collect full response
-          for await (const textDelta of result.textStream) {
-            fullAssistantResponse += textDelta;
-            const data = `data: ${JSON.stringify({ type: 'text', content: textDelta })}\\n\\n`;
-            controller.enqueue(encoder.encode(data));
-          }
+      console.log(`[CHAT] StreamText result created`);
 
-          // Send tool results with full data (not just summaries)
-          for (const toolCall of toolCalls) {
-            const data = `data: ${JSON.stringify({ 
-              type: 'tool_result', 
-              toolName: toolCall.toolName,
-              parameters: toolCall.parameters,
-              timestamp: toolCall.timestamp,
-              result: toolCall.result 
-            })}\\n\\n`;
-            controller.enqueue(encoder.encode(data));
-          }
-
-          // Save assistant message to database
-          try {
-            await saveMessage(env, finalConversationId, 'assistant', fullAssistantResponse, toolCalls.length > 0 ? toolCalls : null);
-          } catch (error) {
-            console.error('Failed to save assistant message:', error);
-          }
-
-          // Send end signal
-          const endData = `data: ${JSON.stringify({ type: 'done' })}\\n\\n`;
-          controller.enqueue(encoder.encode(endData));
-          controller.close();
+      // Save the conversation and messages after completion in background
+      result.text.then(async (fullText) => {
+        console.log(`[CHAT] Full response:`, fullText);
+        try {
+          await saveMessage(env, finalConversationId, 'assistant', fullText, toolCalls.length > 0 ? toolCalls : null);
+        } catch (error) {
+          console.error('Failed to save assistant message:', error);
         }
       });
 
-      return new Response(stream, {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Headers': 'Content-Type'
+      // Use AI SDK's built-in streaming response
+      return result.pipeDataStreamToResponse(new Response(), {
+        init: {
+          headers: {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Content-Type',
+            'X-Vercel-AI-Data-Stream': 'v1'
+          }
         }
       });
 
