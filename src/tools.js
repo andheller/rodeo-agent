@@ -380,13 +380,18 @@ export function createTools(env = null, allowedTools = null) {
     {
       name: "execute_sql",
       description: "Execute a SQL SELECT query against the DuckDB database and return results. This tool is safe to use and should be used to fulfill user requests for data. The database contains the following tables:\n\n" +
-        "Available Tables: frpagg, frpair, frpctg, frphold, frpindx, frpsec, frpsi1, frptcd, frptran\n\n" +
+        "Available Tables: frpagg, frpair, frpcobae, frpctg, frphold, frpindx, frprw, frpsec, frpsectr, frpsi1, frptcd, frptolerpkg, frptran, frpuobae\n\n" +
         "Key Tables:\n" +
         "- frpair (Accounts): ACCT, NAME, STATUS, ACTIVE, FYE, etc.\n" +
         "- frphold (Holdings): AACCT, ADATE, HID, HUNITS, HPRINCIPAL, HACCRUAL, etc.\n" +
         "- frpsec (Securities): ID, TICKER, CUSIP, NAMETKR, ASSETTYPE, CURPRICE, etc.\n" +
         "- frptran (Transactions): Transaction data\n" +
-        "- frpindx (Index Data): INDX, IDATE, IPRICE, IINC, IRET\n\n" +
+        "- frpindx (Index Data): INDX, IDATE, IPRICE, IINC, IRET\n" +
+        "- frpcobae (Cash Out of Balance): account, period_start, period_end, beginning_cash, net_cash_flow, actual_ending_cash, calculated_ending_cash, out_of_balance_amount\n" +
+        "- frpuobae (Units Out of Balance): account, security, period_start, period_end, beginning_units, net_unit_flow, actual_ending_units, calculated_ending_units, out_of_balance_units\n" +
+        "- frprw (Rate Warnings): acct, adate, sector, indx, uvr, iret, tolerance, abs_diff\n" +
+        "- frpsectr (Sector Data): acct, sector, adate, pmkt, pacc, mkt, acc, net_flows, inc, gain_loss, uvr\n" +
+        "- frptolerpkg (Tolerance Package): sector, indx, tolerance\n\n" +
         "Note: All tables support both SELECT and UPDATE/INSERT/DELETE operations.",
       parameters: {
         type: "object",
@@ -409,6 +414,11 @@ export function createTools(env = null, allowedTools = null) {
         "- frpsec (Securities): ID, TICKER, CUSIP, NAMETKR, ASSETTYPE, CURPRICE, etc.\n" +
         "- frptran (Transactions): Transaction data\n" +
         "- frpindx (Index Data): INDX, IDATE, IPRICE, IINC, IRET\n" +
+        "- frpcobae (Cash Out of Balance): account, period_start, period_end, beginning_cash, net_cash_flow, actual_ending_cash, calculated_ending_cash, out_of_balance_amount\n" +
+        "- frpuobae (Units Out of Balance): account, security, period_start, period_end, beginning_units, net_unit_flow, actual_ending_units, calculated_ending_units, out_of_balance_units\n" +
+        "- frprw (Rate Warnings): acct, adate, sector, indx, uvr, iret, tolerance, abs_diff\n" +
+        "- frpsectr (Sector Data): acct, sector, adate, pmkt, pacc, mkt, acc, net_flows, inc, gain_loss, uvr\n" +
+        "- frptolerpkg (Tolerance Package): sector, indx, tolerance\n" +
         "- frpagg, frpctg, frpsi1, frptcd (Additional financial data tables)\n\n" +
         "Important: Use single quotes for string literals (e.g., 'FAKE013', 'Account Name'), not double quotes.",
       parameters: {
