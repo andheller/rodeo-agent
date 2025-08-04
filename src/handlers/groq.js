@@ -44,7 +44,8 @@ async function executeTool(toolName, arguments_, env) {
 
 export async function handleGroqRequest(request, env) {
   try {
-    const { prompt, messages = [] } = await request.json();
+    const { prompt, messages = [], stream = false } = await request.json();
+    console.log('🔄 Groq Request - Stream enabled:', stream);
     
     if (!prompt) {
       return new Response(JSON.stringify({ error: "Missing prompt" }), {
@@ -172,17 +173,81 @@ Your role is to be an analyst and data manager. Provide insights, trends, summar
           temperature: 0.6,
           max_completion_tokens: 2048,
           top_p: 1,
-          stream: false,
+          stream: stream,
           stop: null
         })
       });
+      
+      console.log('📡 Groq API Response Status:', response.status);
+      console.log('📡 Response Headers:', Object.fromEntries(response.headers.entries()));
 
       if (!response.ok) {
         const errorData = await response.text();
         throw new Error(`Groq API error: ${response.status} - ${errorData}`);
       }
 
-      const data = await response.json();
+      // Handle streaming response
+      if (stream) {
+        console.log('🌊 Starting stream processing...');
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let message = { content: '', tool_calls: null };
+        
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            console.log('🌊 Stream reading complete');
+            break;
+          }
+          
+          const chunk = decoder.decode(value, { stream: true });
+          console.log('📦 Raw chunk received:', chunk.length, 'bytes');
+          buffer += chunk;
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const data = line.slice(6);
+              console.log('📝 SSE data line:', data.substring(0, 100) + '...');
+              
+              if (data === '[DONE]') {
+                console.log('✅ Stream DONE signal received');
+                break;
+              }
+              
+              try {
+                const parsed = JSON.parse(data);
+                if (parsed.choices && parsed.choices[0]) {
+                  const delta = parsed.choices[0].delta;
+                  if (delta.content) {
+                    console.log('💬 Content delta:', delta.content);
+                    message.content += delta.content;
+                  }
+                  if (delta.tool_calls) {
+                    console.log('🔧 Tool calls delta:', delta.tool_calls);
+                    message.tool_calls = delta.tool_calls;
+                  }
+                }
+              } catch (e) {
+                console.log('⚠️ Failed to parse JSON chunk:', e.message);
+              }
+            }
+          }
+        }
+        
+        const data = {
+          choices: [{
+            message: message
+          }]
+        };
+        console.log('🌊 Stream processed message:', message);
+      } else {
+        console.log('📄 Processing non-streaming response...');
+        var data = await response.json();
+        console.log('📄 Non-streaming data received:', JSON.stringify(data, null, 2));
+      }
       
       if (!data.choices || !data.choices[0]) {
         throw new Error("Invalid response format from Groq API");
@@ -190,6 +255,12 @@ Your role is to be an analyst and data manager. Provide insights, trends, summar
 
       const choice = data.choices[0];
       const message = choice.message;
+      
+      console.log('🤖 Assistant message:', {
+        content: message.content ? message.content.substring(0, 100) + '...' : 'null',
+        has_tool_calls: !!message.tool_calls,
+        tool_calls_count: message.tool_calls ? message.tool_calls.length : 0
+      });
       
       // Add assistant's response to messages
       groqMessages.push({
@@ -234,6 +305,7 @@ Your role is to be an analyst and data manager. Provide insights, trends, summar
       } else {
         // No more tools to use, extract final response
         finalResponse = message.content || "No response generated";
+        console.log('✅ Final response ready:', finalResponse.substring(0, 100) + '...');
         break;
       }
       

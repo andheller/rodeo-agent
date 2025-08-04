@@ -10,10 +10,6 @@
 		"test": "vitest"
 	},
 	"dependencies": {
-		"ai": "^4.0.19",
-		"@ai-sdk/openai": "^1.0.9",
-		"@ai-sdk/groq": "^1.0.5",
-		"@ai-sdk/anthropic": "^1.0.14",
 		"zod": "^3.22.4",
 		"mathjs": "^12.3.1"
 	},

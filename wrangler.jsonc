@@ -6,7 +6,7 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "rodeo-agent",
 	"main": "src/index.js",
-	"compatibility_date": "2025-07-02",
+	"compatibility_date": "2025-06-17",
 	"observability": {
 		"enabled": true
 	},
@@ -29,7 +29,7 @@
 			"binding": "R2",
 			"bucket_name": "rodeo-files"
 		}
-	]
+	],
 	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
@@ -63,5 +63,14 @@
 	 * Service Bindings (communicate between multiple Workers)
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
 	 */
-	// "services": [{ "binding": "MY_SERVICE", "service": "my-service" }]
+	// "services": [{ "binding": "MY_SERVICE", "service": "my-service" }],
+
+	/**
+	 * Environments
+	 */
+	"env": {
+		"dev": {
+			"name": "dev-rodeo-agent"
+		}
+	}
 }
