@@ -6,26 +6,40 @@ const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 function createGroqTools(env) {
   const tools = createTools(env);
   
-  return tools.map(tool => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters
-    }
-  }));
+  return Object.keys(tools).map(toolName => {
+    const tool = tools[toolName];
+    return {
+      type: "function",
+      function: {
+        name: toolName,
+        description: tool.description,
+        parameters: {
+          type: "object",
+          properties: tool.inputSchema.shape ? 
+            Object.fromEntries(
+              Object.entries(tool.inputSchema.shape).map(([key, zodType]) => [
+                key,
+                { type: "string", description: zodType.description || `${key} parameter` }
+              ])
+            ) : {},
+          required: tool.inputSchema._def?.typeName === 'ZodObject' ? 
+            Object.keys(tool.inputSchema.shape) : []
+        }
+      }
+    };
+  });
 }
 
 // Execute a tool by name
 async function executeTool(toolName, arguments_, env) {
   const tools = createTools(env);
-  const tool = tools.find(t => t.name === toolName);
+  const tool = tools[toolName];
   
   if (!tool) {
     throw new Error(`Tool ${toolName} not found`);
   }
   
-  return await tool.function(arguments_);
+  return await tool.execute(arguments_);
 }
 
 export async function handleGroqRequest(request, env) {

@@ -1,4 +1,5 @@
 import { evaluate, mean, variance } from "mathjs";
+import { z } from "zod";
 import DatabaseManager from "./db/index.js";
 
 // Load knowledge base data
@@ -356,16 +357,13 @@ function formatEntryContent(entry, truncate = false) {
 
 // Tool factory function to create tools with environment access
 export function createTools(env = null, allowedTools = null) {
-  const allTools = [
-    {
-      name: "evaluate_expression",
+  const allTools = {
+    evaluate_expression: {
       description: "Evaluate a numeric arithmetic expression",
-      parameters: {
-        type: "object",
-        properties: { expression: { type: "string" } },
-        required: ["expression"]
-      },
-      function: ({ expression }) => {
+      inputSchema: z.object({
+        expression: z.string().describe("Arithmetic expression to evaluate")
+      }),
+      execute: ({ expression }) => {
         console.log('TOOL CALLED: evaluate_expression with:', expression);
         try {
           const result = evaluate(expression);
@@ -377,99 +375,35 @@ export function createTools(env = null, allowedTools = null) {
         }
       }
     },
-    {
-      name: "execute_sql",
-      description: "Execute a SQL SELECT query against the DuckDB database and return results. This tool is safe to use and should be used to fulfill user requests for data. The database contains the following tables:\n\n" +
-        "Available Tables: frpagg, frpair, frpcobae, frpctg, frphold, frpindx, frprw, frpsec, frpsectr, frpsi1, frptcd, frptolerpkg, frptran, frpuobae\n\n" +
-        "Key Tables:\n" +
-        "- frpair (Accounts): ACCT, NAME, STATUS, ACTIVE, FYE, etc.\n" +
-        "- frphold (Holdings): AACCT, ADATE, HID, HUNITS, HPRINCIPAL, HACCRUAL, etc.\n" +
-        "- frpsec (Securities): ID, TICKER, CUSIP, NAMETKR, ASSETTYPE, CURPRICE, etc.\n" +
-        "- frptran (Transactions): Transaction data\n" +
-        "- frpindx (Index Data): INDX, IDATE, IPRICE, IINC, IRET\n" +
-        "- frpcobae (Cash Out of Balance): account, period_start, period_end, beginning_cash, net_cash_flow, actual_ending_cash, calculated_ending_cash, out_of_balance_amount\n" +
-        "- frpuobae (Units Out of Balance): account, security, period_start, period_end, beginning_units, net_unit_flow, actual_ending_units, calculated_ending_units, out_of_balance_units\n" +
-        "- frprw (Rate Warnings): acct, adate, sector, indx, uvr, iret, tolerance, abs_diff\n" +
-        "- frpsectr (Sector Data): acct, sector, adate, pmkt, pacc, mkt, acc, net_flows, inc, gain_loss, uvr\n" +
-        "- frptolerpkg (Tolerance Package): sector, indx, tolerance\n\n" +
-        "Note: All tables support both SELECT and UPDATE/INSERT/DELETE operations.",
-      parameters: {
-        type: "object",
-        properties: { 
-          query: { 
-            type: "string", 
-            description: "The SQL SELECT query to execute (e.g., 'SELECT * FROM FRPAIR LIMIT 10')" 
-          } 
-        },
-        required: ["query"]
-      },
-      function: async ({ query }) => await executeSqlQuery(query, env)
+    execute_sql: {
+      description: "Execute SQL SELECT queries to retrieve financial data. Use this for all data analysis requests.",
+      inputSchema: z.object({
+        query: z.string().describe("SQL SELECT query to execute")
+      }),
+      execute: async ({ query }) => await executeSqlQuery(query, env)
     },
-    {
-      name: "prepare_sql_for_user",
-      description: "Prepare a data-modifying SQL query (UPDATE, INSERT, or DELETE operations) and return it to the user for approval. This tool does not execute the query - it returns it as a button for the user to approve and execute. Use this for any operations that modify database content.\n\n" +
-        "Available tables for modification:\n" +
-        "- frpair (Accounts): ACCT, NAME, STATUS, ACTIVE, FYE, etc.\n" +
-        "- frphold (Holdings): AACCT, ADATE, HID, HUNITS, HPRINCIPAL, HACCRUAL, etc.\n" +
-        "- frpsec (Securities): ID, TICKER, CUSIP, NAMETKR, ASSETTYPE, CURPRICE, etc.\n" +
-        "- frptran (Transactions): Transaction data\n" +
-        "- frpindx (Index Data): INDX, IDATE, IPRICE, IINC, IRET\n" +
-        "- frpcobae (Cash Out of Balance): account, period_start, period_end, beginning_cash, net_cash_flow, actual_ending_cash, calculated_ending_cash, out_of_balance_amount\n" +
-        "- frpuobae (Units Out of Balance): account, security, period_start, period_end, beginning_units, net_unit_flow, actual_ending_units, calculated_ending_units, out_of_balance_units\n" +
-        "- frprw (Rate Warnings): acct, adate, sector, indx, uvr, iret, tolerance, abs_diff\n" +
-        "- frpsectr (Sector Data): acct, sector, adate, pmkt, pacc, mkt, acc, net_flows, inc, gain_loss, uvr\n" +
-        "- frptolerpkg (Tolerance Package): sector, indx, tolerance\n" +
-        "- frpagg, frpctg, frpsi1, frptcd (Additional financial data tables)\n\n" +
-        "Important: Use single quotes for string literals (e.g., 'FAKE013', 'Account Name'), not double quotes.",
-      parameters: {
-        type: "object",
-        properties: { 
-          query: { 
-            type: "string", 
-            description: "The SQL query to prepare for user approval (e.g., 'UPDATE INT_FRPAIR_RAW SET NAME = \"New Name\" WHERE ACCT = \"123\"')" 
-          } 
-        },
-        required: ["query"]
-      },
-      function: async ({ query }) => await prepareSqlForUser(query, env)
+    prepare_sql_for_user: {
+      description: "Prepare UPDATE, INSERT, or DELETE queries for user approval. Returns query as approval button - does not execute. Use for all data modification requests.",
+      inputSchema: z.object({
+        query: z.string().describe("SQL query to prepare for user approval")
+      }),
+      execute: async ({ query }) => await prepareSqlForUser(query, env)
     },
-    {
-      name: "execute_user_approved_sql",
-      description: "Execute a SQL query that has been approved by the user. This is only used when the user has clicked the approval button.",
-      parameters: {
-        type: "object",
-        properties: { 
-          query: { 
-            type: "string", 
-            description: "The user-approved SQL query to execute" 
-          } 
-        },
-        required: ["query"]
-      },
-      function: async ({ query }) => await executeUserApprovedSql(query, env)
+    execute_user_approved_sql: {
+      description: "Execute user-approved SQL query. Only used when user clicks approval button.",
+      inputSchema: z.object({
+        query: z.string().describe("User-approved SQL query to execute")
+      }),
+      execute: async ({ query }) => await executeUserApprovedSql(query, env)
     },
-    {
-      name: "lookup_knowledge_base",
-      description: "Search and retrieve information from the First Rate Performance knowledge base. Use this tool to find definitions, procedures, technical details, and documentation about the First Rate system. Supports exact term matching, partial text search, regex patterns (using * wildcards or regex syntax), and full-text content search as fallback.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: {
-            type: "string",
-            description: "Search term or specific entry ID to look up (e.g., 'benchmark', 'performance calculation', 'FRPAIR')"
-          },
-          category: {
-            type: "string",
-            description: "Optional category to filter search results (e.g., 'terminology', 'performance', 'data_management')"
-          },
-          detailed: {
-            type: "boolean",
-            description: "Whether to return full detailed content (true) or truncated summaries (false). Default is false."
-          }
-        },
-        required: ["query"]
-      },
-      function: ({ query, category = null, detailed = false }) => {
+    lookup_knowledge_base: {
+      description: "Search First Rate Performance knowledge base for definitions, procedures, and technical documentation. Use for terminology questions.",
+      inputSchema: z.object({
+        query: z.string().describe("Search term or entry ID to look up"),
+        category: z.string().describe("Optional category to filter search results").optional(),
+        detailed: z.boolean().describe("Return full content (true) or summary (false). Default false.").optional()
+      }),
+      execute: ({ query, category = null, detailed = false }) => {
         console.log('TOOL CALLED: lookup_knowledge_base with:', { query, category, detailed });
         
         try {
@@ -536,15 +470,10 @@ export function createTools(env = null, allowedTools = null) {
         }
       }
     },
-    {
-      name: "get_knowledge_base_categories",
-      description: "Get a list of all available knowledge base categories with their file counts. Use this to understand what types of information are available in the knowledge base.",
-      parameters: {
-        type: "object",
-        properties: {},
-        required: []
-      },
-      function: () => {
+    get_knowledge_base_categories: {
+      description: "Get list of available knowledge base categories. Use to explore what information is available.",
+      inputSchema: z.object({}),
+      execute: () => {
         console.log('TOOL CALLED: get_knowledge_base_categories');
         
         try {
@@ -570,20 +499,12 @@ export function createTools(env = null, allowedTools = null) {
         }
       }
     },
-    {
-      name: "browse_knowledge_base_category",
-      description: "Browse all entries in a specific knowledge base category. Matches category names exactly or by display name. Use get_knowledge_base_categories first to see available options.",
-      parameters: {
-        type: "object",
-        properties: {
-          category: {
-            type: "string",
-            description: "The category to browse (e.g., 'terminology', 'performance', 'data_management')"
-          }
-        },
-        required: ["category"]
-      },
-      function: ({ category }) => {
+    browse_knowledge_base_category: {
+      description: "Browse all entries in a specific knowledge base category. Use get_knowledge_base_categories first to see options.",
+      inputSchema: z.object({
+        category: z.string().describe("Category to browse")
+      }),
+      execute: ({ category }) => {
         console.log('TOOL CALLED: browse_knowledge_base_category with:', { category });
         
         try {
@@ -640,11 +561,17 @@ export function createTools(env = null, allowedTools = null) {
         }
       }
     }
-  ];
+  };
 
   // Filter tools if allowedTools is specified
   if (allowedTools && Array.isArray(allowedTools)) {
-    return allTools.filter(tool => allowedTools.includes(tool.name));
+    const filteredTools = {};
+    allowedTools.forEach(toolName => {
+      if (allTools[toolName]) {
+        filteredTools[toolName] = allTools[toolName];
+      }
+    });
+    return filteredTools;
   }
   
   return allTools;

@@ -6,23 +6,37 @@ const CLAUDE_API_URL = "https://api.anthropic.com/v1/messages";
 function createClaudeTools(env) {
   const tools = createTools(env);
   
-  return tools.map(tool => ({
-    name: tool.name,
-    description: tool.description,
-    input_schema: tool.parameters
-  }));
+  return Object.keys(tools).map(toolName => {
+    const tool = tools[toolName];
+    return {
+      name: toolName,
+      description: tool.description,
+      input_schema: {
+        type: "object",
+        properties: tool.inputSchema.shape ? 
+          Object.fromEntries(
+            Object.entries(tool.inputSchema.shape).map(([key, zodType]) => [
+              key,
+              { type: "string", description: zodType.description || `${key} parameter` }
+            ])
+          ) : {},
+        required: tool.inputSchema._def?.typeName === 'ZodObject' ? 
+          Object.keys(tool.inputSchema.shape) : []
+      }
+    };
+  });
 }
 
 // Execute a tool by name
 async function executeTool(toolName, input, env) {
   const tools = createTools(env);
-  const tool = tools.find(t => t.name === toolName);
+  const tool = tools[toolName];
   
   if (!tool) {
     throw new Error(`Tool ${toolName} not found`);
   }
   
-  return await tool.function(input);
+  return await tool.execute(input);
 }
 
 export async function handleClaudeRequest(request, env) {

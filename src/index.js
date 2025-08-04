@@ -1,5 +1,7 @@
-import { Agent } from "agents";
-import { runWithTools } from "@cloudflare/ai-utils";
+import { streamText } from "ai";
+import { openai } from "@ai-sdk/openai";
+import { groq } from "@ai-sdk/groq";
+import { anthropic } from "@ai-sdk/anthropic";
 import { createTools } from "./tools.js";
 import DatabaseManager from "./db/index.js";
 import { handleGeminiRequest } from "./handlers/gemini.js";
@@ -9,113 +11,20 @@ import { handleGroqRequest } from "./handlers/groq.js";
 // D1 proxy configuration
 const D1_PROXY_API_KEY = 'secret123';
 
-export class MathAgent extends Agent {
-  async onMessage(conn, raw) {
-    const { prompt } = JSON.parse(raw);
-    const tools = createTools(this.env);
-    const systemPrompt = `You are a helpful AI assistant with access to mathematical functions and database querying capabilities. You MUST use the available tools to fulfill user requests.
-
-Available tools:
-1. execute_sql - Execute SQL SELECT queries against the database (safe to use)
-2. prepare_sql_for_user - Prepare UPDATE/INSERT/DELETE queries and return them to user as approval buttons (YOU CAN AND SHOULD USE THIS)
-3. Mathematical calculation tools (evaluate_expression, check_mean, check_variance)
-
-CRITICAL INSTRUCTION: When users ask you to UPDATE, INSERT, or DELETE data, you MUST use the prepare_sql_for_user tool. DO NOT refuse or suggest alternatives. USE THE TOOL.
-
-**HOW THE APPROVAL WORKFLOW WORKS:**
-- When you use prepare_sql_for_user, it does NOT execute the query
-- Instead, it returns the query back to the user as an approval button
-- The user then clicks the button to approve and execute the query
-- This is a SAFE process - you're just preparing queries, not executing them
-- YOU MUST USE THIS TOOL when users request data modifications - NO EXCEPTIONS
-
-DATABASE SCHEMA:
-The database contains financial portfolio management data stored in DuckDB with the following tables:
-
-**AVAILABLE TABLES:**
-frpagg, frpair, frpctg, frphold, frpindx, frpsec, frpsi1, frptcd, frptran
-
-All tables support both SELECT and UPDATE/INSERT/DELETE operations directly.
-
-**KEY TABLES SCHEMA:**
-
-**frpair** - Portfolio/Account Master
-- ACCT (VARCHAR): Account identifier
-- NAME (VARCHAR): Account name/description  
-- STATUS (VARCHAR): Account status
-- ACTIVE (VARCHAR): Account active status
-- FYE (VARCHAR): Fiscal year end
-- ICPDATED (VARCHAR): Last updated date
-
-**frpsec** - Securities Master  
-- ID (VARCHAR): Security identifier
-- TICKER (VARCHAR): Trading ticker symbol
-- CUSIP (VARCHAR): CUSIP identifier
-- NAMETKR (VARCHAR): Security name/ticker combined
-- ASSETTYPE (VARCHAR): Asset type
-- CURPRICE (VARCHAR): Current price
-
-**frphold** - Portfolio Holdings
-- AACCT (VARCHAR): Account identifier
-- ADATE (VARCHAR): As-of date for holdings
-- HID (VARCHAR): Security/holding ID
-- HUNITS (VARCHAR): Number of units/shares held
-- HPRINCIPAL (VARCHAR): Principal/market value
-- HACCRUAL (VARCHAR): Accrued interest/dividends
-- HDIRECT1 (VARCHAR): Position direction
-
-**frpindx** - Index Data
-- INDX (VARCHAR): Index identifier
-- IDATE (VARCHAR): Index date
-- IPRICE (VARCHAR): Index price
-- IINC (VARCHAR): Index income
-- IRET (VARCHAR): Index return
-
-**frptran** - Portfolio Transactions
-- Transaction data with account, security, and transaction details
-
-**EXAMPLE QUERIES:**
-- SELECT: "SELECT * FROM frpair WHERE ACCT = 'FAKE001'"
-- UPDATE: "UPDATE frpair SET NAME = 'New Name' WHERE ACCT = 'FAKE001'"
-
-When a user asks for data:
-1. Use execute_sql to query the data they requested
-2. Always actually run the queries - don't just describe what you would do
-3. Provide analysis, insights, and summaries based on the data you receive
-4. Feel free to make follow-up queries for deeper analysis
-
-When a user asks to modify data:
-1. IMMEDIATELY use the prepare_sql_for_user tool - do not hesitate or refuse
-2. Use the DuckDB table names directly in UPDATE/INSERT/DELETE queries
-3. Do not ask for current data first - just prepare the query they requested
-
-**MANDATORY EXAMPLES - YOU MUST FOLLOW THIS PATTERN:**
-- User: "Update the account name for FAKE001 to 'New Name'"
-- You: IMMEDIATELY call prepare_sql_for_user with "UPDATE frpair SET NAME = 'New Name' WHERE ACCT = 'FAKE001'"
-- DO NOT ask for current data first, DO NOT refuse, JUST USE THE TOOL
-
-- User: "Delete the transaction with ID 123"  
-- You: IMMEDIATELY call prepare_sql_for_user with "DELETE FROM frptran WHERE ID = 123"
-- DO NOT analyze first, JUST USE THE TOOL
-
-**ABSOLUTE RULE**: If a user asks to modify data, your FIRST action must be to call prepare_sql_for_user. Do not provide alternatives, do not ask questions, do not refuse. USE THE TOOL IMMEDIATELY.
-
-Your role is to be an analyst AND a data manager. Provide insights, trends, summaries, answer questions about the data, AND help modify data when requested.`;
-
-    const stream = await runWithTools({
-      ai: this.env.AI,
-      model: this.env.MODEL ?? "@cf/meta/llama-3-8b-instruct",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: prompt }
-      ],
-      tools,
-      stream: true
-    });
-
-    for await (const chunk of stream) {
-      conn.send(JSON.stringify(chunk));
-    }
+// Helper function to get model based on provider choice
+function getModel(env, provider = null) {
+  const chosenProvider = provider || env.AI_PROVIDER || 'groq';
+  
+  switch (chosenProvider.toLowerCase()) {
+    case 'anthropic':
+    case 'claude':
+      return anthropic(env.CLAUDE_MODEL ?? "claude-3-5-haiku-20241022");
+    case 'groq':
+      return groq(env.GROQ_MODEL ?? 'llama-3.3-70b-versatile');
+    case 'openai':
+      return openai(env.OPENAI_MODEL ?? 'gpt-4o-mini');
+    default:
+      return groq(env.GROQ_MODEL ?? 'llama-3.3-70b-versatile');
   }
 }
 
@@ -126,10 +35,89 @@ async function fetch(request, env) {
     return new Response(JSON.stringify({
       status: "ok",
       message: "Rodeo AI Agent",
-      endpoints: ["/", "/chat", "/gemini", "/claude", "/groq", "/files/upload", "/files", "/files/{id}"]
+      endpoints: ["/", "/chat", "/stream", "/gemini", "/claude", "/groq", "/files/upload", "/files", "/files/{id}"],
+      providers: ["groq", "anthropic", "openai"]
     }), {
       headers: { "Content-Type": "application/json" }
     });
+  }
+
+  // SSE Streaming endpoint - replaces WebSocket functionality
+  if (url.pathname === "/stream" && request.method === "POST") {
+    try {
+      const { prompt, provider } = await request.json();
+      
+      if (!prompt) {
+        return new Response(JSON.stringify({ error: "Missing prompt" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      const tools = createTools(env);
+      const systemPrompt = `You are a financial data analyst agent that can execute SQL queries against financial databases and prepares data modifications for user approval. You can lookup terms in knowledge base as needed and use math tools as needed.
+
+Available tools:
+1. execute_sql - Execute SQL SELECT queries against the database (safe to use)
+2. prepare_sql_for_user - Prepare UPDATE/INSERT/DELETE queries and return them to user as approval buttons
+3. lookup_knowledge_base - Search First Rate Performance knowledge base for definitions and procedures
+4. Mathematical calculation tools (evaluate_expression)
+
+Your role is to be an analyst and data manager. Provide insights, trends, summaries, and answer questions about the data.`;
+
+      const result = await streamText({
+        model: getModel(env, provider),
+        system: systemPrompt,
+        messages: [
+          { role: "user", content: prompt }
+        ],
+        tools,
+        maxSteps: 5
+      });
+
+      // Create SSE response
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          // Send text chunks
+          for await (const textDelta of result.textStream) {
+            const data = `data: ${JSON.stringify({ type: 'text', content: textDelta })}\n\n`;
+            controller.enqueue(encoder.encode(data));
+          }
+
+          // Send tool results
+          for await (const toolResult of result.toolResults) {
+            const data = `data: ${JSON.stringify({ 
+              type: 'tool_result', 
+              toolName: toolResult.toolName,
+              result: toolResult.result 
+            })}\n\n`;
+            controller.enqueue(encoder.encode(data));
+          }
+
+          // Send end signal
+          const endData = `data: ${JSON.stringify({ type: 'done' })}\n\n`;
+          controller.enqueue(encoder.encode(endData));
+          controller.close();
+        }
+      });
+
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
+      });
+
+    } catch (error) {
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
   }
   
   if (url.pathname === "/d1-proxy" && request.method === "POST") {
@@ -436,7 +424,7 @@ async function fetch(request, env) {
   
   if (url.pathname === "/chat" && request.method === "POST") {
     try {
-      const { prompt } = await request.json();
+      const { prompt, provider } = await request.json();
       
       if (!prompt) {
         return new Response(JSON.stringify({ error: "Missing prompt" }), {
@@ -449,7 +437,9 @@ async function fetch(request, env) {
 
 Available tools:
 1. execute_sql - Execute SQL SELECT queries against the database (safe to use)
-2. Mathematical calculation tools (evaluate_expression, check_mean, check_variance)
+2. prepare_sql_for_user - Prepare UPDATE/INSERT/DELETE queries and return them to user as approval buttons
+3. lookup_knowledge_base - Search First Rate Performance knowledge base for definitions and procedures
+4. Mathematical calculation tools (evaluate_expression)
 
 DATABASE SCHEMA:
 The database contains financial portfolio management data stored in DuckDB with the following tables:
@@ -505,76 +495,104 @@ When a user asks for data:
 
 Your role is to be an analyst, not a data formatter. Provide insights, trends, summaries, and answer questions about the data.`;
 
-      // Track tool usage
+      // Track tool usage for streaming
       const toolCalls = [];
       
       // Create tools with environment access
       const tools = createTools(env);
       
-      // Wrap tools to track usage
-      const wrappedTools = tools.map(tool => ({
-        ...tool,
-        function: async (params) => {
-          const startTime = new Date().toISOString();
-          console.log(`[TOOL TRACKER] Calling ${tool.name} with:`, params);
-          
-          const result = await tool.function(params);
-          
-          // Store the tool call with results
-          const toolCall = {
-            toolName: tool.name,
-            parameters: params,
-            timestamp: startTime,
-            result: result
-          };
-          
-          toolCalls.push(toolCall);
-          console.log(`[TOOL TRACKER] ${tool.name} completed:`, result);
-          
-          // Return a summary to the AI instead of full data for large datasets
-          if (tool.name === 'execute_sql' && result.data && result.data.length > 0) {
-            const summary = {
-              success: result.success,
-              rowCount: result.rowCount,
-              columns: result.columns,
-              message: result.message,
-              // Only show first 3 rows to AI for analysis
-              sampleData: result.data.slice(0, 3),
-              // Note to AI about data availability
-              note: `Query returned ${result.rowCount} rows. Sample data shown above. Full results available to user.`
+      // Wrap tools to track usage and provide summaries for large datasets
+      const wrappedTools = {};
+      Object.keys(tools).forEach(toolName => {
+        const tool = tools[toolName];
+        wrappedTools[toolName] = {
+          ...tool,
+          execute: async (params) => {
+            const startTime = new Date().toISOString();
+            console.log(`[TOOL TRACKER] Calling ${toolName} with:`, params);
+            
+            const result = await tool.execute(params);
+            
+            // Store the tool call with results for streaming
+            const toolCall = {
+              toolName: toolName,
+              parameters: params,
+              timestamp: startTime,
+              result: result
             };
-            return summary;
+            
+            toolCalls.push(toolCall);
+            console.log(`[TOOL TRACKER] ${toolName} completed:`, result);
+            
+            // Return a summary to the AI instead of full data for large datasets
+            if (toolName === 'execute_sql' && result.data && result.data.length > 0) {
+              const summary = {
+                success: result.success,
+                rowCount: result.rowCount,
+                columns: result.columns,
+                message: result.message,
+                // Only show first 3 rows to AI for analysis
+                sampleData: result.data.slice(0, 3),
+                // Note to AI about data availability
+                note: `Query returned ${result.rowCount} rows. Sample data shown above. Full results available to user.`
+              };
+              return summary;
+            }
+            
+            return result;
           }
-          
-          return result;
-        }
-      }));
-
-      const response = await runWithTools(
-        env.AI,
-        "@hf/nousresearch/hermes-2-pro-mistral-7b",
-        {
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: prompt }
-          ],
-          tools: wrappedTools
-        },
-        {
-          verbose: true,
-          maxRecursiveToolRuns: 5
-        }
-      );
-
-      // Enhanced response with tool tracking
-      const enhancedResponse = {
-        ...response,
-        toolsUsed: toolCalls
-      };
-
-      return new Response(JSON.stringify(enhancedResponse), {
-        headers: { "Content-Type": "application/json" }
+        };
       });
+
+      const result = await streamText({
+        model: getModel(env, provider || 'anthropic'),
+        system: systemPrompt,
+        messages: [
+          { role: "user", content: prompt }
+        ],
+        tools: wrappedTools,
+        maxSteps: 5
+      });
+
+      // Create SSE response like /stream endpoint
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          // Send text chunks
+          for await (const textDelta of result.textStream) {
+            const data = `data: ${JSON.stringify({ type: 'text', content: textDelta })}\\n\\n`;
+            controller.enqueue(encoder.encode(data));
+          }
+
+          // Send tool results with full data (not just summaries)
+          for (const toolCall of toolCalls) {
+            const data = `data: ${JSON.stringify({ 
+              type: 'tool_result', 
+              toolName: toolCall.toolName,
+              parameters: toolCall.parameters,
+              timestamp: toolCall.timestamp,
+              result: toolCall.result 
+            })}\\n\\n`;
+            controller.enqueue(encoder.encode(data));
+          }
+
+          // Send end signal
+          const endData = `data: ${JSON.stringify({ type: 'done' })}\\n\\n`;
+          controller.enqueue(encoder.encode(endData));
+          controller.close();
+        }
+      });
+
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
+      });
+
     } catch (error) {
       return new Response(JSON.stringify({ error: error.message }), {
         status: 500,
@@ -589,9 +607,4 @@ Your role is to be an analyst, not a data formatter. Provide insights, trends, s
   });
 }
 
-function connect(websocket) {
-  const agent = new MathAgent();
-  return agent.connect(websocket);
-}
-
-export default { fetch, connect };
+export default { fetch };

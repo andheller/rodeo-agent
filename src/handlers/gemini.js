@@ -28,11 +28,25 @@ export async function handleGeminiRequest(request, env) {
     const tools = createTools(env);
     
     // Convert tools to Gemini function declarations
-    const functionDeclarations = tools.map(tool => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters
-    }));
+    const functionDeclarations = Object.keys(tools).map(toolName => {
+      const tool = tools[toolName];
+      return {
+        name: toolName,
+        description: tool.description,
+        parameters: {
+          type: "object",
+          properties: tool.inputSchema.shape ? 
+            Object.fromEntries(
+              Object.entries(tool.inputSchema.shape).map(([key, zodType]) => [
+                key,
+                { type: "string", description: zodType.description || `${key} parameter` }
+              ])
+            ) : {},
+          required: tool.inputSchema._def?.typeName === 'ZodObject' ? 
+            Object.keys(tool.inputSchema.shape) : []
+        }
+      };
+    });
 
     // System prompt for Gemini
     const systemPrompt = `You are a helpful AI assistant with access to mathematical functions and database querying capabilities. You MUST use the available tools to fulfill user requests.
@@ -77,13 +91,13 @@ Your role is to be an analyst and data manager. Provide insights, trends, summar
 
     // Function to execute tool calls
     async function executeFunctionCall(functionCall) {
-      const tool = tools.find(t => t.name === functionCall.name);
+      const tool = tools[functionCall.name];
       if (!tool) {
         return { error: `Unknown function: ${functionCall.name}` };
       }
       
       try {
-        const result = await tool.function(functionCall.args);
+        const result = await tool.execute(functionCall.args);
         toolCalls.push({ name: functionCall.name, args: functionCall.args, result });
         return result;
       } catch (error) {
