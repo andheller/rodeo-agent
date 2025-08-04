@@ -28,6 +28,40 @@ function getModel(env, provider = null) {
   }
 }
 
+// Helper functions for conversation management
+async function createOrGetConversation(env, conversationId, userId, provider) {
+  if (conversationId) {
+    // Check if conversation exists
+    const stmt = env.DB.prepare('SELECT * FROM conversations WHERE id = ?');
+    const existing = await stmt.bind(conversationId).first();
+    if (existing) {
+      return conversationId;
+    }
+  }
+  
+  // Create new conversation
+  const newId = conversationId || crypto.randomUUID();
+  const stmt = env.DB.prepare(`
+    INSERT INTO conversations (id, user_id, model, created_at, updated_at)
+    VALUES (?, ?, ?, datetime('now'), datetime('now'))
+  `);
+  await stmt.bind(newId, userId, provider || 'groq').run();
+  return newId;
+}
+
+async function saveMessage(env, conversationId, role, content, toolCalls = null) {
+  const stmt = env.DB.prepare(`
+    INSERT INTO conversation_messages (conversation_id, role, content, tool_calls, created_at)
+    VALUES (?, ?, ?, ?, datetime('now'))
+  `);
+  await stmt.bind(
+    conversationId,
+    role,
+    content,
+    toolCalls ? JSON.stringify(toolCalls) : null
+  ).run();
+}
+
 async function fetch(request, env) {
   const url = new URL(request.url);
   
@@ -35,7 +69,7 @@ async function fetch(request, env) {
     return new Response(JSON.stringify({
       status: "ok",
       message: "Rodeo AI Agent",
-      endpoints: ["/", "/chat", "/stream", "/gemini", "/claude", "/groq", "/files/upload", "/files", "/files/{id}"],
+      endpoints: ["/", "/chat", "/stream", "/gemini", "/claude", "/groq", "/files/upload", "/files", "/files/{id}", "/conversations", "/conversations/{id}"],
       providers: ["groq", "anthropic", "openai"]
     }), {
       headers: { "Content-Type": "application/json" }
@@ -424,7 +458,7 @@ Your role is to be an analyst and data manager. Provide insights, trends, summar
   
   if (url.pathname === "/chat" && request.method === "POST") {
     try {
-      const { prompt, provider } = await request.json();
+      const { prompt, provider, conversationId, userId = 1 } = await request.json();
       
       if (!prompt) {
         return new Response(JSON.stringify({ error: "Missing prompt" }), {
@@ -495,6 +529,12 @@ When a user asks for data:
 
 Your role is to be an analyst, not a data formatter. Provide insights, trends, summaries, and answer questions about the data.`;
 
+      // Create or get conversation
+      const finalConversationId = await createOrGetConversation(env, conversationId, userId, provider);
+      
+      // Save user message
+      await saveMessage(env, finalConversationId, 'user', prompt);
+      
       // Track tool usage for streaming
       const toolCalls = [];
       
@@ -556,10 +596,17 @@ Your role is to be an analyst, not a data formatter. Provide insights, trends, s
 
       // Create SSE response like /stream endpoint
       const encoder = new TextEncoder();
+      let fullAssistantResponse = '';
+      
       const stream = new ReadableStream({
         async start(controller) {
-          // Send text chunks
+          // Send conversation ID first
+          const initData = `data: ${JSON.stringify({ type: 'conversation_id', conversationId: finalConversationId })}\\n\\n`;
+          controller.enqueue(encoder.encode(initData));
+          
+          // Send text chunks and collect full response
           for await (const textDelta of result.textStream) {
+            fullAssistantResponse += textDelta;
             const data = `data: ${JSON.stringify({ type: 'text', content: textDelta })}\\n\\n`;
             controller.enqueue(encoder.encode(data));
           }
@@ -574,6 +621,13 @@ Your role is to be an analyst, not a data formatter. Provide insights, trends, s
               result: toolCall.result 
             })}\\n\\n`;
             controller.enqueue(encoder.encode(data));
+          }
+
+          // Save assistant message to database
+          try {
+            await saveMessage(env, finalConversationId, 'assistant', fullAssistantResponse, toolCalls.length > 0 ? toolCalls : null);
+          } catch (error) {
+            console.error('Failed to save assistant message:', error);
           }
 
           // Send end signal
@@ -593,6 +647,66 @@ Your role is to be an analyst, not a data formatter. Provide insights, trends, s
         }
       });
 
+    } catch (error) {
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  }
+  
+  // Get conversation history
+  if (url.pathname === "/conversations" && request.method === "GET") {
+    try {
+      const userId = url.searchParams.get('userId') || '1';
+      const limit = parseInt(url.searchParams.get('limit') || '50');
+      
+      const stmt = env.DB.prepare(`
+        SELECT id, model, created_at, updated_at
+        FROM conversations 
+        WHERE user_id = ? 
+        ORDER BY updated_at DESC 
+        LIMIT ?
+      `);
+      const conversations = await stmt.bind(userId, limit).all();
+      
+      return new Response(JSON.stringify({
+        success: true,
+        conversations: conversations.results
+      }), {
+        headers: { "Content-Type": "application/json" }
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  }
+  
+  // Get specific conversation messages
+  if (url.pathname.startsWith("/conversations/") && request.method === "GET") {
+    try {
+      const conversationId = url.pathname.split('/')[2];
+      
+      const stmt = env.DB.prepare(`
+        SELECT role, content, tool_calls, created_at
+        FROM conversation_messages 
+        WHERE conversation_id = ? 
+        ORDER BY created_at ASC
+      `);
+      const messages = await stmt.bind(conversationId).all();
+      
+      return new Response(JSON.stringify({
+        success: true,
+        conversationId,
+        messages: messages.results?.map(msg => ({
+          ...msg,
+          tool_calls: msg.tool_calls ? JSON.parse(msg.tool_calls) : null
+        })) || []
+      }), {
+        headers: { "Content-Type": "application/json" }
+      });
     } catch (error) {
       return new Response(JSON.stringify({ error: error.message }), {
         status: 500,
