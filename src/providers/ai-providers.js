@@ -2,8 +2,7 @@
 function anthropicModelId(name) {
 	if (!name) return 'claude-3-5-haiku-20241022'; // default to haiku
 	if (name === 'haiku') return 'claude-3-5-haiku-20241022';
-	if (name === 'opus') return 'claude-3-opus-20240229';
-	if (name === 'sonnet') return 'claude-3-5-sonnet-20241022';
+	if (name === 'sonnet') return 'claude-sonnet-4-0';
 	// allow full API names through unchanged
 	return name;
 }
@@ -23,12 +22,6 @@ export async function streamAnthropicResponse(env, messages, systemPrompt, model
 		requestBody.tools = tools;
 	}
 
-	console.log('[API] Calling Anthropic with request:', {
-		model: requestBody.model,
-		messageCount: requestBody.messages.length,
-		toolCount: requestBody.tools?.length || 0,
-		hasSystemPrompt: !!requestBody.system
-	});
 
 	const response = await fetch('https://api.anthropic.com/v1/messages', {
 		method: 'POST',
@@ -50,10 +43,6 @@ export async function streamAnthropicResponse(env, messages, systemPrompt, model
 }
 
 export async function streamGroqResponse(env, messages, systemPrompt, modelName, tools = null) {
-	console.log('🔄 streamGroqResponse called with streaming enabled');
-	console.log('📋 Model:', modelName || env.GROQ_MODEL || 'llama-3.3-70b-versatile');
-	console.log('📝 Messages count:', messages.length);
-	console.log('🔧 Tools provided:', tools ? tools.length : 0);
 	
 	const requestBody = {
 		model: modelName || env.GROQ_MODEL || 'llama-3.3-70b-versatile',
@@ -73,8 +62,6 @@ export async function streamGroqResponse(env, messages, systemPrompt, modelName,
 		}));
 	}
 
-	console.log('📡 Sending request to Groq API...');
-	console.log('📋 Request body:', JSON.stringify(requestBody, null, 2));
 
 	const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
 		method: 'POST',
@@ -85,8 +72,6 @@ export async function streamGroqResponse(env, messages, systemPrompt, modelName,
 		body: JSON.stringify(requestBody),
 	});
 
-	console.log('📡 Groq API Response Status:', response.status);
-	console.log('📡 Response Headers:', Object.fromEntries(response.headers.entries()));
 
 	if (!response.ok) {
 		const errorText = await response.text();
@@ -94,7 +79,6 @@ export async function streamGroqResponse(env, messages, systemPrompt, modelName,
 		throw new Error(`Groq API error: ${response.status} ${response.statusText}`);
 	}
 
-	console.log('✅ Groq API Response OK, returning stream');
 	return response.body;
 }
 

@@ -138,7 +138,6 @@ export async function handleAgent(env, request) {
 		});
 	}
 
-	console.log(`[AGENT] Starting autonomous loop for task: ${finalTask}`);
 
 	// Create or get conversation for compatibility with frontend
 	const finalConversationId = conversationId || await createOrGetConversation(env, conversationId, userId, provider || 'anthropic');
@@ -157,7 +156,6 @@ export async function handleAgent(env, request) {
 	
 	if (isSimpleQuery) {
 		
-		console.log('[AGENT] Using simple tool execution fallback');
 		try {
 			const tools = createTools(env);
 			let fallbackResponse = '';
@@ -165,7 +163,6 @@ export async function handleAgent(env, request) {
 			
 			// Check if it's a SQL query
 			if (finalTask.toLowerCase().includes('select ') || finalTask.toLowerCase().includes('from ')) {
-				console.log('[AGENT] Detected SQL query, executing...');
 				toolResult = await tools.execute_sql.execute({
 					query: finalTask.trim()
 				});
@@ -275,12 +272,6 @@ export async function handleAgent(env, request) {
 	}
 
 	try {
-		console.log('[AGENT] About to create AgentLoop with env:', {
-			hasEnv: !!env,
-			hasApiKey: !!env?.ANTHROPIC_API_KEY,
-			envType: typeof env,
-			envKeys: env ? Object.keys(env).slice(0, 10) : 'no env'
-		});
 		
 		// Create agent loop instance (only if API key is available)
 		const agentLoop = new AgentLoop(env, finalTask, {
@@ -393,7 +384,6 @@ export async function handleAgent(env, request) {
 		    finalTask.toLowerCase().includes('what is')) {
 			
 			try {
-				console.log('[AGENT] Falling back to simple knowledge base lookup');
 				const tools = createTools(env);
 				const kbResult = await tools.lookup_knowledge_base.execute({
 					query: finalTask,
@@ -471,7 +461,7 @@ export async function handleAgent(env, request) {
 
 // Chat endpoint with streaming and tool support
 export async function handleChat(env, request) {
-	const { prompt, provider, model, conversationId, userId = 1, messages } = await request.json();
+	const { prompt, provider, model, conversationId, userId = 1, messages, enableLoop = true, maxIterations = 10 } = await request.json();
 
 	// Support legacy 'prompt' or new 'messages' format
 	const finalMessages = messages || (prompt ? [{ role: 'user', content: prompt }] : null);
@@ -490,7 +480,6 @@ export async function handleChat(env, request) {
 	const userContent = finalMessages[finalMessages.length - 1]?.content || '';
 	await saveMessage(env, finalConversationId, 'user', userContent);
 
-	console.log(`[CHAT] Using provider: ${provider || 'anthropic'}`);
 
 	// Check API keys
 	const selectedProvider = provider || 'anthropic';
@@ -512,32 +501,11 @@ export async function handleChat(env, request) {
 	const tools = createTools(env);
 	const anthropicTools = convertToolsToAnthropic(tools);
 
-	// Get the appropriate stream based on provider
-	let apiStream;
-
-	try {
-		if (selectedProvider === 'anthropic' || selectedProvider === 'claude') {
-			apiStream = await streamAnthropicResponse(env, finalMessages, SYSTEM_PROMPT, model, anthropicTools);
-		} else if (selectedProvider === 'groq') {
-			console.log('🔄 Calling streamGroqResponse...');
-			apiStream = await streamGroqResponse(env, finalMessages, SYSTEM_PROMPT, model, anthropicTools);
-			console.log('🌊 Got stream from Groq, starting processing...');
-		} else if (selectedProvider === 'openai') {
-			apiStream = await streamOpenAIResponse(env, finalMessages, SYSTEM_PROMPT, model, anthropicTools);
-		} else {
-			throw new Error(`Unsupported provider: ${selectedProvider}`);
-		}
-	} catch (streamError) {
-		console.error('[STREAM] Error calling API:', streamError.message);
-		throw streamError;
-	}
+	// API stream will be created inside the loop
 
 	// Create manual streaming response with tool support
 	const encoder = new TextEncoder();
-	let fullResponse = '';
-	let toolCalls = [];
-	let isToolUse = false;
-
+	
 	const stream = new ReadableStream({
 		async start(controller) {
 			try {
@@ -545,33 +513,71 @@ export async function handleChat(env, request) {
 				const initData = `data: ${JSON.stringify({ type: 'conversation_id', conversationId: finalConversationId })}\n\n`;
 				controller.enqueue(encoder.encode(initData));
 
-				// Read from API stream manually
-				const reader = apiStream.getReader();
-				const decoder = new TextDecoder();
-				let buffer = '';
-				console.log('🌊 Starting to read from API stream...');
+				// Loop variables
+				let currentIteration = 0;
+				let shouldContinueLoop = true;
+				let currentMessages = [...finalMessages]; // Copy to avoid mutation
 
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) {
-						console.log('🌊 Stream reading complete');
+				while (shouldContinueLoop && currentIteration < maxIterations) {
+					currentIteration++;
+					
+					console.log(`[CHAT LOOP] Starting iteration ${currentIteration}/${maxIterations}`);
+					
+					// Send iteration marker if looping
+					if (enableLoop && currentIteration > 1) {
+						console.log(`[CHAT LOOP] Sending iteration marker to client`);
+						const iterationData = `data: ${JSON.stringify({ 
+							type: 'iteration', 
+							iteration: currentIteration,
+							maxIterations: maxIterations
+						})}\n\n`;
+						controller.enqueue(encoder.encode(iterationData));
+					}
+
+					// Reset for this iteration
+					let fullResponse = '';
+					let toolCalls = [];
+					let isToolUse = false;
+
+					// Get AI stream for current messages
+					let apiStream;
+					try {
+						if (selectedProvider === 'anthropic' || selectedProvider === 'claude') {
+							apiStream = await streamAnthropicResponse(env, currentMessages, SYSTEM_PROMPT, model, anthropicTools);
+						} else if (selectedProvider === 'groq') {
+							apiStream = await streamGroqResponse(env, currentMessages, SYSTEM_PROMPT, model, anthropicTools);
+						} else if (selectedProvider === 'openai') {
+							apiStream = await streamOpenAIResponse(env, currentMessages, SYSTEM_PROMPT, model, anthropicTools);
+						} else {
+							throw new Error(`Unsupported provider: ${selectedProvider}`);
+						}
+					} catch (streamError) {
+						console.error('[STREAM] Error calling AI API:', streamError.message);
+						const errorData = `data: ${JSON.stringify({ type: 'error', content: 'AI API error occurred' })}\n\n`;
+						controller.enqueue(encoder.encode(errorData));
 						break;
 					}
 
+					// Read from API stream manually
+					const reader = apiStream.getReader();
+					const decoder = new TextDecoder();
+					let buffer = '';
+
+					while (true) {
+						const { done, value } = await reader.read();
+						if (done) {
+							break;
+						}
+
 					const chunk = decoder.decode(value, { stream: true });
-					console.log('📦 Raw chunk received:', chunk.length, 'bytes');
-					console.log('📦 Raw chunk content:', JSON.stringify(chunk));
 					
 					// Check if chunk is direct JSON without newlines
 					if (chunk.trim() && !chunk.includes('\n') && (chunk.includes('"choices"') || chunk.includes('"delta"'))) {
-						console.log('📦 Single JSON chunk detected, processing directly...');
 						try {
 							const directData = JSON.parse(chunk.trim());
-							console.log('📊 Direct parsed data:', directData);
 							
 							if (selectedProvider === 'groq' || selectedProvider === 'openai') {
 								if (directData.choices?.[0]?.delta?.tool_calls) {
-									console.log('🔧 Direct tool calls detected:', directData.choices[0].delta.tool_calls);
 									isToolUse = true;
 									// Handle direct tool calls similar to line processing
 									for (const toolCallDelta of directData.choices[0].delta.tool_calls) {
@@ -592,7 +598,6 @@ export async function handleChat(env, request) {
 									}
 								} else if (directData.choices?.[0]?.delta?.content) {
 									const content = directData.choices[0].delta.content;
-									console.log('💬 Direct content delta:', content);
 									fullResponse += content;
 									const streamData = `data: ${JSON.stringify({ type: 'text', content })}\n\n`;
 									controller.enqueue(encoder.encode(streamData));
@@ -600,7 +605,6 @@ export async function handleChat(env, request) {
 							}
 							continue;
 						} catch (e) {
-							console.log('📦 Not valid single JSON, processing as lines...');
 						}
 					}
 					buffer += chunk;
@@ -615,27 +619,22 @@ export async function handleChat(env, request) {
 						if (line.startsWith('data: ')) {
 							// SSE format
 							dataStr = line.slice(6);
-							console.log('📝 SSE data line:', dataStr.substring(0, 100) + '...');
 							// Skip [DONE] marker
 							if (dataStr === '[DONE]') {
-								console.log('✅ Stream DONE signal received');
 								continue;
 							}
 						} else if (line.startsWith('event: ')) {
 							// SSE event type - log and continue without trying to parse as JSON
 							const eventType = line.slice(7);
-							console.log('📡 SSE event:', eventType);
 							continue;
 						} else if (line.trim() && !line.startsWith(':') && !line.startsWith('id: ') && !line.startsWith('retry: ')) {
 							// Direct JSON line format (Groq/OpenAI) - exclude other SSE headers
 							dataStr = line.trim();
-							console.log('📝 JSON line:', dataStr.substring(0, 100) + '...');
 						}
 						
 						if (dataStr) {
 							try {
 								data = JSON.parse(dataStr);
-								console.log('📊 Parsed data:', data);
 
 								// Handle different provider formats
 								if (selectedProvider === 'anthropic' || selectedProvider === 'claude') {
@@ -662,7 +661,6 @@ export async function handleChat(env, request) {
 								} else if (selectedProvider === 'groq' || selectedProvider === 'openai') {
 									// Handle OpenAI-compatible tool calls
 									if (data.choices?.[0]?.delta?.tool_calls) {
-										console.log('🔧 Tool calls detected:', data.choices[0].delta.tool_calls);
 										isToolUse = true;
 										
 										// Handle streaming tool calls - accumulate them
@@ -676,31 +674,25 @@ export async function handleChat(env, request) {
 													name: '',
 													input: ''
 												};
-												console.log('🔧 Initialized new tool call at index', index);
 											}
 											
 											// Update tool call data
 											if (toolCallDelta.function) {
 												if (toolCallDelta.function.name) {
 													toolCalls[index].name = toolCallDelta.function.name;
-													console.log('🔧 Set tool name:', toolCalls[index].name);
 												}
 												if (toolCallDelta.function.arguments) {
 													// Handle null arguments from Groq
 													if (toolCallDelta.function.arguments === 'null' || toolCallDelta.function.arguments === null) {
 														toolCalls[index].input = '{}';
-														console.log('🔧 Set empty arguments for tool');
 													} else {
 														toolCalls[index].input += toolCallDelta.function.arguments;
-														console.log('🔧 Appended arguments:', toolCallDelta.function.arguments);
 													}
 												}
 											}
-											console.log('🔧 Current tool call state:', toolCalls[index]);
 										}
 									} else if (data.choices?.[0]?.delta?.content) {
 										const content = data.choices[0].delta.content;
-										console.log('💬 Content delta:', content);
 										fullResponse += content;
 										const streamData = `data: ${JSON.stringify({ type: 'text', content })}\n\n`;
 										controller.enqueue(encoder.encode(streamData));
@@ -716,7 +708,6 @@ export async function handleChat(env, request) {
 				// Process tool calls if any (filter out empty ones)
 				const validToolCalls = toolCalls.filter(tc => tc && tc.name);
 				if (validToolCalls.length > 0) {
-					console.log('[TOOL] Processing tool calls:', validToolCalls);
 					
 					for (const toolCall of validToolCalls) {
 						try {
@@ -730,14 +721,11 @@ export async function handleChat(env, request) {
 							if (toolCall.name === 'execute_sql' && (!toolInput.query || toolInput.query === '')) {
 								// Provide a default query for demonstration
 								toolInput.query = 'SELECT COUNT(*) as total_accounts FROM FRPAIR';
-								console.log('[TOOL] Using default SQL query for demo:', toolInput.query);
 							}
 							
-							console.log('[TOOL] Executing', toolCall.name, 'with input:', toolInput);
 							
 							// Execute the tool
 							const toolResult = await executeTool(toolCall.name, toolInput, tools, env);
-							console.log('[TOOL] Tool execution completed:', toolCall.name, 'Result:', toolResult);
 							
 							// Send tool result to client
 							const toolData = `data: ${JSON.stringify({ 
@@ -753,6 +741,9 @@ export async function handleChat(env, request) {
 								fullResponse += `\n\n${toolResult.message}`;
 							} else if (toolResult.error) {
 								fullResponse += `\n\nTool error: ${toolResult.error}`;
+							} else if (toolCall.name === 'complete_task' && toolResult.response) {
+								// For complete_task, include the response directly in the conversation
+								fullResponse += `\n\n${toolResult.response}`;
 							} else if (toolResult.message) {
 								fullResponse += `\n\n${toolResult.message}`;
 							}
@@ -769,17 +760,122 @@ export async function handleChat(env, request) {
 					}
 				}
 
-				// Save the full response to database
-				try {
-					await saveMessage(env, finalConversationId, 'assistant', fullResponse, toolCalls.length > 0 ? toolCalls : null);
-				} catch (error) {
-					console.error('Failed to save assistant message:', error);
+				// Check if we should continue looping
+				if (enableLoop) {
+					// Add current AI response to conversation (no tool_calls field for Anthropic)
+					currentMessages.push({
+						role: 'assistant',
+						content: fullResponse
+					});
+
+					// Add tool results if any
+					const validToolCalls = toolCalls.filter(tc => tc && tc.name);
+					if (validToolCalls.length > 0) {
+						// Execute tools and get results (reusing existing tool execution logic)
+						const toolResults = [];
+						for (const toolCall of validToolCalls) {
+							try {
+								let toolInput = {};
+								if (toolCall.input && toolCall.input !== '{}' && toolCall.input !== 'null') {
+									toolInput = JSON.parse(toolCall.input);
+								}
+								
+								if (toolCall.name === 'execute_sql' && (!toolInput.query || toolInput.query === '')) {
+									toolInput.query = 'SELECT COUNT(*) as total_accounts FROM FRPAIR';
+								}
+								
+								const toolResult = await executeTool(toolCall.name, toolInput, tools, env);
+								toolResults.push({
+									tool_call_id: toolCall.id,
+									content: JSON.stringify(toolResult)
+								});
+							} catch (toolError) {
+								toolResults.push({
+									tool_call_id: toolCall.id,
+									content: JSON.stringify({ error: toolError.message })
+								});
+							}
+						}
+
+						// Add tool results to conversation (Anthropic format)
+						const smartTruncateToolResult = (result) => {
+							try {
+								const parsed = JSON.parse(result.content);
+								
+								// Handle SQL results - truncate large datasets
+								if (parsed.data && Array.isArray(parsed.data)) {
+									if (parsed.data.length > 10) {
+										return JSON.stringify({
+											...parsed,
+											data: [
+												...parsed.data.slice(0, 5),
+												{ _truncated: `... ${parsed.data.length - 10} rows omitted ...` },
+												...parsed.data.slice(-5)
+											],
+											_originalRowCount: parsed.data.length
+										});
+									}
+								}
+								
+								// Handle other large objects - truncate long strings
+								const truncated = JSON.stringify(parsed).substring(0, 4000);
+								return truncated.length < JSON.stringify(parsed).length ? truncated + "..." : JSON.stringify(parsed);
+								
+							} catch (e) {
+								// If not JSON, just truncate the string
+								return result.content.length > 4000 ? result.content.substring(0, 4000) + "..." : result.content;
+							}
+						};
+
+						const toolResultsContent = "TOOL RESULTS: " + toolResults.map(result => 
+							`Tool ${result.tool_call_id}: ${smartTruncateToolResult(result)}`
+						).join('\n\n');
+						
+						currentMessages.push({
+							role: 'user',
+							content: toolResultsContent
+						});
+
+						// Enhanced continuation logic: continue if continue_agent called OR if analysis could benefit from more depth
+						const hasContinueAgent = validToolCalls.some(tc => tc.name === 'continue_agent');
+						const hasCompleteTask = validToolCalls.some(tc => tc.name === 'complete_task');
+						const hasAnalysisTools = validToolCalls.some(tc => ['execute_sql', 'lookup_knowledge_base', 'browse_knowledge_base_category', 'get_knowledge_base_categories'].includes(tc.name));
+						
+						// Continue if: continue_agent called OR (analysis tools used AND no complete_task AND under max iterations)
+						shouldContinueLoop = hasContinueAgent || 
+											(!hasCompleteTask && hasAnalysisTools && currentIteration < maxIterations);
+						
+						console.log(`[CHAT LOOP] Tool calls: ${validToolCalls.map(tc => tc.name).join(', ')}`);
+						console.log(`[CHAT LOOP] Continue conditions - continue_agent: ${hasContinueAgent}, complete_task: ${hasCompleteTask}, analysis_tools: ${hasAnalysisTools}, iteration: ${currentIteration}/${maxIterations}`);
+						console.log(`[CHAT LOOP] Continue loop: ${shouldContinueLoop}`);
+					} else {
+						// No tools called, stop looping
+						shouldContinueLoop = false;
+						console.log(`[CHAT LOOP] No tools called, stopping loop`);
+					}
+				} else {
+					// Loop not enabled, stop after first iteration
+					shouldContinueLoop = false;
+					console.log(`[CHAT LOOP] Loop not enabled, stopping after iteration ${currentIteration}`);
 				}
 
-				// Send end signal
-				const endData = `data: ${JSON.stringify({ type: 'done' })}\n\n`;
-				controller.enqueue(encoder.encode(endData));
-				controller.close();
+				// If this is the last iteration, save to database
+				if (!shouldContinueLoop || currentIteration >= maxIterations) {
+					console.log(`[CHAT LOOP] Ending loop - shouldContinue: ${shouldContinueLoop}, iteration: ${currentIteration}/${maxIterations}`);
+					// Save the full conversation to database
+					try {
+						await saveMessage(env, finalConversationId, 'assistant', fullResponse, toolCalls.length > 0 ? toolCalls : null);
+					} catch (error) {
+						console.error('Failed to save assistant message:', error);
+					}
+
+					// Send end signal
+					const endData = `data: ${JSON.stringify({ type: 'done' })}\n\n`;
+					controller.enqueue(encoder.encode(endData));
+					controller.close();
+					break; // Exit the while loop
+				}
+			} // End of while loop
 			} catch (error) {
 				console.error('Streaming error:', error);
 				const errorData = `data: ${JSON.stringify({ type: 'error', content: 'Streaming error occurred' })}\n\n`;

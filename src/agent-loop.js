@@ -79,11 +79,6 @@ function truncateDirectLookup(result, maxTokens) {
 // Agent loop conversation manager
 class AgentLoop {
   constructor(env, initialMessage, options = {}) {
-    console.log('[AGENT] Constructor called with env:', {
-      hasEnv: !!env,
-      hasApiKey: !!env?.ANTHROPIC_API_KEY,
-      envKeys: env ? Object.keys(env) : 'no env'
-    });
     
     this.env = env;
     this.tools = createAgentTools(env); // Use agent tools with continue/complete
@@ -247,18 +242,13 @@ Focus on providing value through data analysis and insights.`;
       // Add tools converted to Anthropic format
       const anthropicTools = this.convertToolsToAnthropic();
       
-      console.log('[AGENT] Calling AI with:', {
-        messageCount: messages.length,
-        toolCount: anthropicTools.length,
-        hasApiKey: !!this.env.ANTHROPIC_API_KEY
-      });
       
       // Stream from Anthropic
       const apiStream = await streamAnthropicResponse(
         this.env, 
         messages, 
         enhancedSystemPrompt, 
-        'claude-3-5-sonnet-20241022',
+        'claude-sonnet-4-0',
         anthropicTools
       );
 
@@ -377,23 +367,15 @@ Focus on providing value through data analysis and insights.`;
 
       // Parse tool arguments
       toolCalls.forEach(tool => {
-        console.log('[AGENT] Processing tool for arguments:', {
-          name: tool.name,
-          hasInputBuffer: !!tool.inputBuffer,
-          inputBuffer: tool.inputBuffer
-        });
         
         if (tool.inputBuffer) {
           try {
             tool.arguments = JSON.parse(tool.inputBuffer);
-            console.log('[AGENT] Parsed arguments:', tool.arguments);
           } catch (e) {
-            console.log('[AGENT] Failed to parse arguments, using empty object:', e.message);
             tool.arguments = {};
           }
           delete tool.inputBuffer;
         } else {
-          console.log('[AGENT] No input buffer, setting empty arguments');
           tool.arguments = {};
         }
       });
@@ -424,7 +406,6 @@ export function createAgentTools(env) {
       reason: z.string().describe("Why you want to continue (for logging)")
     }),
     execute: ({ reason }) => {
-      console.log('AGENT CONTINUES:', reason);
       return {
         success: true,
         action: 'continue',
@@ -441,7 +422,6 @@ export function createAgentTools(env) {
       recommendations: z.string().describe("Any recommendations or next steps").optional()
     }),
     execute: ({ summary, recommendations }) => {
-      console.log('AGENT COMPLETES:', summary);
       return {
         success: true,
         action: 'complete',

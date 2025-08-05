@@ -90,11 +90,9 @@ function validateSqlQuery(query) {
 
 // Execute SQL query using the database manager
 async function executeSqlQuery(query, env = null) {
-  console.log('TOOL CALLED: execute_sql with:', query);
   
   const validation = validateSqlQuery(query);
   if (!validation.valid) {
-    console.log('TOOL ERROR: Query validation failed:', validation.error);
     
     // If it's a data-modifying query, return it for user approval
     if (validation.requiresApproval) {
@@ -110,13 +108,12 @@ async function executeSqlQuery(query, env = null) {
   
   try {
     // Create database manager instance
-    const db = new DatabaseManager(env?.DB || null);
+    const db = new DatabaseManager(env?.DB || null, null, env);
     
     // Execute query (financial data goes to DuckDB)
     const data = await db.executeFinancialQuery(query);
     const columns = data.length > 0 ? Object.keys(data[0]) : [];
     
-    console.log('TOOL RESULT: Processed data:', { dataLength: data.length, columns });
     
     return {
       success: true,
@@ -127,14 +124,12 @@ async function executeSqlQuery(query, env = null) {
     };
     
   } catch (err) {
-    console.log('TOOL ERROR: Database query error:', err);
     return { error: `Database error: ${err.message}` };
   }
 }
 
 // Prepare SQL query for user approval
 async function prepareSqlForUser(query, env = null) {
-  console.log('TOOL CALLED: prepare_sql_for_user with:', query);
   
   try {
     // Validate that this is a modification query
@@ -146,7 +141,7 @@ async function prepareSqlForUser(query, env = null) {
     // Optional verification step - extract table name and run a quick lookup
     let verificationInfo = '';
     try {
-      const db = new DatabaseManager(env?.DB || null);
+      const db = new DatabaseManager(env?.DB || null, null, env);
       
       // Extract table name from query for verification
       const tableMatch = query.match(/(?:UPDATE|DELETE FROM|INSERT INTO)\s+(\w+)/i);
@@ -187,23 +182,20 @@ async function prepareSqlForUser(query, env = null) {
     };
     
   } catch (err) {
-    console.log('TOOL ERROR: Prepare query error:', err);
     return { error: `Error preparing query: ${err.message}` };
   }
 }
 
 // Execute user-approved SQL query
 async function executeUserApprovedSql(query, env = null) {
-  console.log('TOOL CALLED: execute_user_approved_sql with:', query);
   
   try {
     // Create database manager instance
-    const db = new DatabaseManager(env?.DB || null);
+    const db = new DatabaseManager(env?.DB || null, null, env);
     
     // Execute the approved query (financial data goes to DuckDB)
     const result = await db.executeFinancialQuery(query);
     
-    console.log('TOOL RESULT: Raw response:', JSON.stringify(result, null, 2));
     
     return {
       success: true,
@@ -212,7 +204,6 @@ async function executeUserApprovedSql(query, env = null) {
     };
     
   } catch (err) {
-    console.log('TOOL ERROR: Database query error:', err);
     return { error: `Database error: ${err.message}` };
   }
 }
@@ -223,6 +214,11 @@ async function executeUserApprovedSql(query, env = null) {
 function searchKnowledgeBase(searchTerm, category = null) {
   const kb = loadKnowledgeBase();
   if (!kb) return [];
+
+  // Handle undefined or null searchTerm
+  if (!searchTerm || typeof searchTerm !== 'string') {
+    return [];
+  }
 
   const searchTermLower = searchTerm.toLowerCase();
   const matches = new Set();
@@ -248,19 +244,16 @@ function searchKnowledgeBase(searchTerm, category = null) {
     });
   }
 
-  // Only continue searching if we haven't found enough results
-  if (matches.size < 5) {
-    // 3. Partial match search in file titles - medium priority
-    Object.keys(kb.files).forEach(fileId => {
-      const file = kb.files[fileId];
-      if (file && (file.title.toLowerCase().includes(searchTermLower) || 
-           file.id.toLowerCase().includes(searchTermLower)) && 
-          !matches.has(fileId) && (!category || file.category === category)) {
-        matches.add(fileId);
-        ranked.partial.push(fileId);
-      }
-    });
-  }
+  // 3. Partial match search in file titles - medium priority
+  Object.keys(kb.files).forEach(fileId => {
+    const file = kb.files[fileId];
+    if (file && (file.title.toLowerCase().includes(searchTermLower) || 
+         file.id.toLowerCase().includes(searchTermLower)) && 
+        !matches.has(fileId) && (!category || file.category === category)) {
+      matches.add(fileId);
+      ranked.partial.push(fileId);
+    }
+  });
 
   // 4. Regex search capability - fix regex detection
   let isRegexSearch = false;
@@ -364,13 +357,10 @@ export function createTools(env = null, allowedTools = null) {
         expression: z.string().describe("Arithmetic expression to evaluate")
       }),
       execute: ({ expression }) => {
-        console.log('TOOL CALLED: evaluate_expression with:', expression);
         try {
           const result = evaluate(expression);
-          console.log('TOOL RESULT:', result);
           return { result };
         } catch (err) {
-          console.log('TOOL ERROR:', err);
           return { error: String(err) };
         }
       }
@@ -404,12 +394,19 @@ export function createTools(env = null, allowedTools = null) {
         detailed: z.boolean().describe("Return full content (true) or summary (false). Default false.").optional()
       }),
       execute: ({ query, category = null, detailed = false }) => {
-        console.log('TOOL CALLED: lookup_knowledge_base with:', { query, category, detailed });
         
         try {
           const kb = loadKnowledgeBase();
           if (!kb) {
             return { error: 'Knowledge base not available' };
+          }
+
+          // Validate query parameter
+          if (!query || typeof query !== 'string') {
+            return { 
+              error: 'Query parameter is required and must be a string',
+              success: false 
+            };
           }
 
           // If query looks like a direct ID, try to get it directly
@@ -474,7 +471,6 @@ export function createTools(env = null, allowedTools = null) {
       description: "Get list of available knowledge base categories. Use to explore what information is available.",
       inputSchema: z.object({}),
       execute: () => {
-        console.log('TOOL CALLED: get_knowledge_base_categories');
         
         try {
           const kb = loadKnowledgeBase();
@@ -505,7 +501,6 @@ export function createTools(env = null, allowedTools = null) {
         category: z.string().describe("Category to browse")
       }),
       execute: ({ category }) => {
-        console.log('TOOL CALLED: browse_knowledge_base_category with:', { category });
         
         try {
           const kb = loadKnowledgeBase();
@@ -559,6 +554,41 @@ export function createTools(env = null, allowedTools = null) {
           console.error('Knowledge base category browse error:', error);
           return { error: `Failed to browse category: ${error.message}` };
         }
+      }
+    },
+
+    // Agent control tools
+    continue_agent: {
+      description: "Continue analyzing with additional tool usage - use when you need to gather more information or perform additional analysis to provide a complete response",
+      inputSchema: z.object({
+        reason: z.string().describe("Why you want to continue analyzing (helps with context)")
+      }),
+      execute: ({ reason }) => {
+        return {
+          success: true,
+          action: 'continue',
+          reason: reason,
+          message: 'Continuing analysis to provide more comprehensive insights'
+        };
+      }
+    },
+
+    complete_task: {
+      description: "Signal that analysis is complete and provide your final response to the user's question",
+      inputSchema: z.object({
+        response: z.string().describe("Your complete answer to the user's question with all the details you found"),
+        summary: z.string().describe("Brief summary of what was accomplished"),
+        recommendations: z.string().describe("Any recommendations or next steps").optional()
+      }),
+      execute: ({ response, summary, recommendations }) => {
+        return {
+          success: true,
+          action: 'complete',
+          response: response,
+          summary: summary,
+          recommendations: recommendations,
+          message: 'Analysis completed successfully'
+        };
       }
     }
   };

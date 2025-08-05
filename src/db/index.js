@@ -2,11 +2,12 @@
 // D1 for agent data, DuckDB for FRP financial data
 
 class DatabaseManager {
-  constructor(d1Database = null, duckdbConfig = null) {
+  constructor(d1Database = null, duckdbConfig = null, env = null) {
     this.d1 = d1Database;
     this.duckdb = duckdbConfig || {
       url: 'https://frai-duckdb-api-production.up.railway.app/query',
-      apiKey: 'secret123'
+      apiKey: 'secret123',
+      bearerToken: env?.DUCKDB_BEARER_TOKEN
     };
   }
 
@@ -33,7 +34,8 @@ class DatabaseManager {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': this.duckdb.apiKey
+          'x-api-key': this.duckdb.apiKey,
+          ...(this.duckdb.bearerToken && { 'Authorization': `Bearer ${this.duckdb.bearerToken}` })
         },
         body: JSON.stringify({ sql: query, source: 'duckdb' })
       });

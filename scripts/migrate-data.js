@@ -5,7 +5,6 @@ import DatabaseManager from '../src/db/index.js';
 // FRP tables remain in DuckDB, but users, report_configurations, and agentic_workflows move to D1
 
 async function migrateData() {
-  console.log('Starting data migration from DuckDB to D1...');
   
   try {
     // Note: This script is designed to run locally with wrangler dev
@@ -101,7 +100,6 @@ async function migrateData() {
     ];
 
     // Create SQL insert scripts for D1
-    console.log('Creating D1 insert scripts...');
     
     let insertScript = '';
     
@@ -131,14 +129,6 @@ async function migrateData() {
     const fs = await import('fs');
     fs.writeFileSync('./migrations/002_seed_data.sql', insertScript);
     
-    console.log('Migration script created: ./migrations/002_seed_data.sql');
-    console.log('Run the following commands to apply the migration:');
-    console.log('');
-    console.log('# For local development:');
-    console.log('npx wrangler d1 execute rodeo-agent-db --file=./migrations/002_seed_data.sql');
-    console.log('');
-    console.log('# For production:');
-    console.log('npx wrangler d1 execute rodeo-agent-db --remote --file=./migrations/002_seed_data.sql');
     
   } catch (error) {
     console.error('Migration failed:', error);

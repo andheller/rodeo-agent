@@ -161,7 +161,7 @@ Your role is to be an analyst and data manager. Provide insights, trends, summar
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
-          model: "claude-3-haiku-20240307",
+          model: "claude-3-5-haiku-20241022",
           max_tokens: 2048,
           system: systemPrompt,
           tools: claudeTools,
@@ -230,7 +230,7 @@ Your role is to be an analyst and data manager. Provide insights, trends, summar
     return new Response(JSON.stringify({
       response: finalResponse,
       toolsUsed: toolCalls,
-      model: "claude-3-haiku"
+      model: "claude-3-5-haiku"
     }), {
       headers: { "Content-Type": "application/json" }
     });
