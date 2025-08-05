@@ -1,19 +1,24 @@
 // Model name mapping for Anthropic
 function anthropicModelId(name) {
-	if (!name) return 'claude-3-5-haiku-20241022'; // default to haiku
-	if (name === 'haiku') return 'claude-3-5-haiku-20241022';
-	if (name === 'sonnet') return 'claude-sonnet-4-0';
+	if (!name) return 'claude-3-5-haiku-latest'; // default to haiku
+	if (name === 'haiku') return 'claude-3-5-haiku-latest';
+	if (name === 'sonnet') return 'claude-sonnet-4-20250514';
 	// allow full API names through unchanged
 	return name;
 }
 
 // Direct API streaming functions
 export async function streamAnthropicResponse(env, messages, systemPrompt, modelName, tools = null) {
+	// Handle both old string format and new array format for system prompt
+	const systemConfig = Array.isArray(systemPrompt) ? systemPrompt : [
+		{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }
+	];
+	
 	const requestBody = {
 		model: anthropicModelId(modelName),
 		max_tokens: 4096,
 		messages: messages,
-		system: systemPrompt,
+		system: systemConfig,  // Now uses array format with caching support
 		stream: true,
 	};
 
@@ -45,7 +50,7 @@ export async function streamAnthropicResponse(env, messages, systemPrompt, model
 export async function streamGroqResponse(env, messages, systemPrompt, modelName, tools = null) {
 	
 	const requestBody = {
-		model: modelName || env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+		model: modelName || env.GROQ_MODEL || 'openai/gpt-oss-120b',
 		messages: [{ role: 'system', content: systemPrompt }, ...messages],
 		stream: true,
 	};

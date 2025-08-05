@@ -1,12 +1,18 @@
 import {
 	handleTestFetch,
-	handleChat,
-	handleAgent,
 	handleConversationsList,
 	handleConversationMessages,
 	handleFileOperations,
 	handleD1ProxyRoute
 } from './handlers/routes.js';
+import {
+	handleChat,
+	handleGrader
+} from './ai.js';
+import {
+	handleToolsList,
+	handleToolExecution
+} from './handlers/tools.js';
 
 export default {
 	async fetch(request, env) {
@@ -33,6 +39,20 @@ export default {
 				return await handleChat(env, request);
 			}
 
+			// Grader endpoint
+			if (url.pathname === '/grader' && request.method === 'POST') {
+				return await handleGrader(env, request);
+			}
+
+
+			// Tools endpoints
+			if (url.pathname === '/tools' && request.method === 'GET') {
+				return await handleToolsList(env);
+			}
+
+			if (url.pathname === '/tools' && request.method === 'POST') {
+				return await handleToolExecution(env, request);
+			}
 
 			// Conversation endpoints
 			if (url.pathname === '/conversations' && request.method === 'GET') {
