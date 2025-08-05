@@ -44,18 +44,6 @@ function createHtmlTable(data, columns) {
 
 
 
-// Common table and column suggestions
-const commonTables = [
-  { name: 'frpindx', description: 'Financial index data with price and return information' },
-  { name: 'frpair', description: 'Account information and relationships' },
-  { name: 'frpsec', description: 'Security master data with asset information' }
-];
-
-const commonColumns = {
-  frpindx: ['INDX', 'IDATE', 'IPRICE', 'IINC', 'IRET'],
-  frpair: ['ACCOUNT_TYPE', 'CLIENT_ID', 'PORTFOLIO_ID'],
-  frpsec: ['SECURITY_ID', 'FACTOR', 'BETA', 'ASSET_TYPE']
-};
 
 // Enhanced SQL Query validation helper with suggestions
 function validateSqlQuery(query) {
@@ -206,29 +194,6 @@ function validateSqlQuery(query) {
     };
   }
   
-  // Table name validation with suggestions
-  const tableMatch = normalizedQuery.match(/from\s+(\w+)/);
-  if (tableMatch) {
-    const tableName = tableMatch[1].toLowerCase();
-    const knownTable = commonTables.find(t => t.name.toLowerCase() === tableName);
-    
-    if (!knownTable) {
-      return {
-        valid: false,
-        error: `Table '${tableName}' might not exist or be accessible`,
-        suggestions: [
-          {
-            category: "Available Tables",
-            items: commonTables.map(t => `${t.name} - ${t.description}`)
-          },
-          {
-            category: "Example Queries",
-            items: commonTables.map(t => `SELECT * FROM ${t.name} LIMIT 5`)
-          }
-        ]
-      };
-    }
-  }
   
   // Performance suggestions for potentially slow queries
   const performanceWarnings = [];
@@ -414,10 +379,10 @@ async function executeSqlQuery(query, env = null) {
       suggestions.push({
         category: "Query Syntax",
         items: [
-          "Check table names are correct (frpindx, frpair, frpsec)",
+          "Check table names are correct",
           "Verify column names exist in the table",
           "Check for typos in SQL keywords",
-          "Try a simpler query first: SELECT * FROM frpindx LIMIT 5"
+          "Try a simpler query first with LIMIT 5"
         ]
       });
     } else if (errorMessage.includes('timeout') || errorMessage.includes('slow')) {
@@ -434,7 +399,7 @@ async function executeSqlQuery(query, env = null) {
         category: "Access",
         items: [
           "Check if table name is correct",
-          "Try with a known table: frpindx, frpair, or frpsec",
+          "Verify table exists and is accessible",
           "Contact administrator if table should be accessible"
         ]
       });
@@ -511,27 +476,6 @@ async function prepareSqlForUser(query, env = null) {
   }
 }
 
-// Execute user-approved SQL query
-async function executeUserApprovedSql(query, env = null) {
-  
-  try {
-    // Create database manager instance
-    const db = new DatabaseManager(env?.DB || null, null, env);
-    
-    // Execute the approved query (financial data goes to DuckDB)
-    const result = await db.executeFinancialQuery(query);
-    
-    
-    return {
-      success: true,
-      message: 'Query executed successfully',
-      result: result
-    };
-    
-  } catch (err) {
-    return { error: `Database error: ${err.message}` };
-  }
-}
 
 // Schema tool removed - schema is now included in system prompt
 
@@ -730,13 +674,6 @@ export function createTools(env = null, allowedTools = null) {
         query: z.string().describe("SQL query to prepare for user approval")
       }),
       execute: async ({ query }) => await prepareSqlForUser(query, env)
-    },
-    execute_user_approved_sql: {
-      description: "Execute user-approved SQL query. Only used when user clicks approval button.",
-      inputSchema: z.object({
-        query: z.string().describe("User-approved SQL query to execute")
-      }),
-      execute: async ({ query }) => await executeUserApprovedSql(query, env)
     },
     lookup_knowledge_base: {
       description: "Search First Rate Performance knowledge base for definitions, procedures, and technical documentation. Accepts both 'query' and 'search_query' parameters. Use detailed=true for complete content. Perfect for batch_tool parallel searches.",

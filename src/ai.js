@@ -1,5 +1,5 @@
 import { streamAnthropicResponse, streamGroqResponse, streamOpenAIResponse } from './providers/ai-providers.js';
-import { CACHED_SYSTEM_PROMPT_CONSOLIDATED, CACHED_SYSTEM_PROMPT, SYSTEM_PROMPT } from './prompts/system-prompt.js';
+import { SYSTEM_PROMPT, SYSTEM_PROMPT_STRING } from './prompts/system-prompt.js';
 import { createOrGetConversation, saveMessage } from './utils/conversation.js';
 import { createTools } from './tools.js';
 import { AI_CONFIG, getModelForProvider, formatLogMessage } from './ai-config.js';
@@ -253,7 +253,7 @@ function buildConversationHistoryXML(messages) {
 // Build cached system prompt with conversation history (respects 4 breakpoint limit)
 function buildCachedSystemWithHistory(messages, maxHistoryMessages = 6) {
 	// Use consolidated system prompt (1 breakpoint)
-	const systemBlocks = [...CACHED_SYSTEM_PROMPT_CONSOLIDATED];
+	const systemBlocks = [...SYSTEM_PROMPT];
 	
 	// Determine which messages to include in history vs recent cache
 	const totalMessages = messages.length;
@@ -373,9 +373,9 @@ export async function handleChat(env, request) {
 	await saveMessage(env, finalConversationId, 'user', userContent);
 
 
-	// Check API keys - map 'default' to groq with gpt-oss-120b
-	let selectedProvider = provider || 'anthropic';
-	let selectedModel = model;
+	// Default to groq with gpt-oss-120b when no provider specified
+	let selectedProvider = provider || 'groq';
+	let selectedModel = model || 'openai/gpt-oss-120b';
 	
 	if (selectedProvider === 'default') {
 		selectedProvider = 'groq';
@@ -472,9 +472,9 @@ export async function handleChat(env, request) {
 							const smartCachedMessages = smartCacheMessages(currentMessages, systemBreakpoints);
 							apiStream = await streamAnthropicResponse(env, smartCachedMessages, systemWithHistory, getModelForProvider(selectedProvider, selectedModel), anthropicTools);
 						} else if (selectedProvider === 'groq') {
-							apiStream = await streamGroqResponse(env, currentMessages, SYSTEM_PROMPT, getModelForProvider(selectedProvider, selectedModel), anthropicTools);
+							apiStream = await streamGroqResponse(env, currentMessages, SYSTEM_PROMPT_STRING, getModelForProvider(selectedProvider, selectedModel), anthropicTools);
 						} else if (selectedProvider === 'openai') {
-							apiStream = await streamOpenAIResponse(env, currentMessages, SYSTEM_PROMPT, getModelForProvider(selectedProvider, selectedModel), anthropicTools);
+							apiStream = await streamOpenAIResponse(env, currentMessages, SYSTEM_PROMPT_STRING, getModelForProvider(selectedProvider, selectedModel), anthropicTools);
 						} else if (selectedProvider === 'gemini') {
 							// Reroute Gemini to Claude Haiku with smart caching
 							const systemWithHistory = buildCachedSystemWithHistory(currentMessages);
@@ -643,7 +643,9 @@ export async function handleChat(env, request) {
 				}
 
 				// Process tool calls if any (filter out empty ones)
+				console.log('[DEBUG] toolCalls array:', JSON.stringify(toolCalls, null, 2));
 				const validToolCalls = toolCalls.filter(tc => tc && tc.name);
+				console.log('[DEBUG] validToolCalls length:', validToolCalls.length);
 				const executedToolResults = []; // Store results for conversation loop
 				if (validToolCalls.length > 0) {
 					
@@ -656,9 +658,15 @@ export async function handleChat(env, request) {
 							}
 							
 							// Special handling for SQL tools that might need default queries
-							if (toolCall.name === 'execute_sql' && (!toolInput.query || toolInput.query === '')) {
-								// Provide a default query for demonstration
-								toolInput.query = 'SELECT COUNT(*) as total_accounts FROM FRPAIR';
+							if (toolCall.name === 'execute_sql') {
+								// Handle both 'sql' and 'query' parameters
+								if (toolInput.sql && !toolInput.query) {
+									toolInput.query = toolInput.sql;
+								}
+								if (!toolInput.query || toolInput.query === '') {
+									// Provide a default query for demonstration
+									toolInput.query = 'SELECT COUNT(*) as total_accounts FROM FRPAIR';
+								}
 							}
 							
 							
@@ -674,6 +682,7 @@ export async function handleChat(env, request) {
 							});
 							
 							// Send tool result to client
+							console.log(`[DEBUG] About to stream tool result for ${toolCall.name}`);
 							// Special handling for batch_tool - expand batch_results into separate tool_result events
 							if (toolCall.name === 'batch_tool' && toolResult.batch_results) {
 								// Send each batch result as a separate tool_result event
@@ -704,6 +713,7 @@ export async function handleChat(env, request) {
 								controller.enqueue(encoder.encode(batchSummaryData));
 							} else {
 								// Regular single tool result
+								console.log(`[DEBUG] Streaming regular tool result for ${toolCall.name}`);
 								const toolData = `data: ${JSON.stringify({ 
 									type: 'tool_result', 
 									toolName: toolCall.name,
