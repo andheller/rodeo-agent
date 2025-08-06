@@ -55,52 +55,43 @@ Manages portfolio membership in composites with sophisticated date control for G
 
 **frpair** - Portfolio/Account Master (Central Demographics Table)
 The master table storing comprehensive portfolio demographic information, management structure, package assignments, and performance configuration. Contains all key portfolio characteristics and serves as the central control table for portfolio-level settings.
-- ACCT (CHAR): Portfolio identifier (Primary Key)
-- NAME (VARCHAR): Portfolio name/description
-- BNK (CHAR): Bank ID for institutional identification
+- ACCT (VARCHAR): Portfolio identifier (Primary Key)
+- NAME (VARCHAR): Portfolio name/description  
+- STATUS (VARCHAR): Portfolio reporting status (O=Open, AGO=Aggregate Open, N=New)
+- active (VARCHAR): Active status (Y/N)
+- userdef3 (VARCHAR): Client-defined field (Key Bank uses '5' as identifier)
 - FYE (CHAR): Fiscal year end month
-- STATUS (CHAR): Portfolio reporting status (active/inactive)
-- ADM (VARCHAR): Administrator ID (configurable)
-- OFFN (VARCHAR): Officer ID for portfolio management (configurable)
-- OBJ (VARCHAR): Portfolio objective ID (configurable)
-- TYP (VARCHAR): Portfolio type ID (configurable)
-- PWR (VARCHAR): Power/authorization level ID (configurable)
-- INDXPKG (CHAR): Benchmark package ID for performance comparison
-- REPTPKG (CHAR): Report package ID for output formatting
-- SECPKG (CHAR): Security package ID for asset classification
-- SECTPKG (CHAR): Sector package ID for portfolio segmentation
-- EQINDX/FXINDX/CEINDX (CHAR): Equity/Fixed/Cash equivalent benchmark IDs
-- WTDINDX (CHAR): Weighted benchmark ID
-- EQPOL/FXPOL (CHAR): Equity/Fixed income policy IDs
-- FREQX (CHAR): Reporting frequency
-- USERDEF (VARCHAR): Client-defined field
-- Used for: Portfolio identification, performance calculation configuration, tax computation, report generation, administrative controls
+- ICPDATED (DATE): Inception/created date
+- ACCTBASE (VARCHAR): Base account identifier
+- Used for: Portfolio identification, performance calculation configuration, report generation, administrative controls
+- NOTE: Does not contain FINANCE_STATUS field - this may be in a different table or system
 
 **frpcobae** - Cash Out of Balance Audit Table
-Tracks cash reconciliation discrepancies and balance auditing across countries/regions. Used to identify missing transactions, incorrect transaction codes, or backdated trades that impact cash balances. Essential for data quality assurance and exception identification.
-- ACCT (CHAR): Portfolio ID
-- COUNTRY (CHAR): Country/region ID for geographic cash tracking
-- ASOFDATE (DATETIME): As-of date for the balance period
-- POS (DECIMAL): Positive cash flow amount (inflows)
-- NEG (DECIMAL): Negative cash flow amount (outflows)  
-- BEGMKT (DECIMAL): Beginning market value/cash position
-- ENDMKT (DECIMAL): Ending market value/cash position
-- BAL (DECIMAL): Balance amount (out-of-balance calculation)
-- Formula: BAL = (BEGMKT + POS - NEG) - ENDMKT (non-zero indicates cash discrepancy)
-- Used for: Cash flow reconciliation, audit exception identification, data quality assurance, international portfolio cash tracking
+Tracks cash reconciliation discrepancies and balance auditing. Used to identify missing transactions, incorrect transaction codes, or backdated trades that impact cash balances. Essential for data quality assurance and exception identification.
+- account (VARCHAR): Portfolio identifier
+- period_start (DATE): Period start date
+- period_end (DATE): Period end date  
+- beginning_cash (DECIMAL): Beginning cash position
+- net_cash_flow (DECIMAL): Net cash flows during period
+- actual_ending_cash (DECIMAL): Actual ending cash balance
+- calculated_ending_cash (DECIMAL): Calculated expected ending balance
+- out_of_balance_amount (DECIMAL): Cash out of balance discrepancy amount
+- Used for: Cash flow reconciliation, audit exception identification, data quality assurance
 
 **frpsec** - Securities Master
-- ID (VARCHAR): Security identifier
+- ID (VARCHAR): Security identifier (Primary Key)
 - TICKER (VARCHAR): Trading ticker symbol
 - CUSIP (VARCHAR): CUSIP identifier
 - NAMETKR (VARCHAR): Security name/ticker combined
-- ASSETTYPE (VARCHAR): Asset type
+- NAMEDESC (VARCHAR): Security description
+- ASSETTYPE (VARCHAR): Asset type classification
+- SSECTOR (VARCHAR): Sector classification
 - CURPRICE (VARCHAR): Current price
 
 **frphold** - Portfolio Holdings
-- AACCT (VARCHAR): Account identifier
-- ADATE (VARCHAR): As-of date for holdings
-- HID (VARCHAR): Security/holding ID
+- AACCT (VARCHAR): Account identifier (for joining with frpair.ACCT)
+- ADATE (VARCHAR): Holdings date (use instead of HDATE)
+- HID (VARCHAR): Security/holding ID  
 - HUNITS (VARCHAR): Number of units/shares held
 - HPRINCIPAL (VARCHAR): Principal/market value
 - HACCRUAL (VARCHAR): Accrued interest/dividends
@@ -113,9 +104,33 @@ Tracks cash reconciliation discrepancies and balance auditing across countries/r
 - IRET (VARCHAR): Index return
 
 **frptran** - Portfolio Transactions
-- Transaction data with account, security, and transaction details
+- AACCT (VARCHAR): Portfolio identifier (use instead of ACCOUNT)
+- HID (VARCHAR): Security identifier
+- TCODE (VARCHAR): Transaction code (DIV, INC, CAFD, CAFR, etc.)
+- TDATE (VARCHAR): Transaction date
+- TUNITS (VARCHAR): Transaction units
+- TPRINCIPAL (VARCHAR): Transaction principal amount
+- TINCOME (VARCHAR): Transaction income amount
+- TCARRY (VARCHAR): Transaction carry amount
+- TSEQ (VARCHAR): Transaction sequence number
+
+**frpuobae** - Units Out of Balance Audit Table
+Tracks unit reconciliation discrepancies for securities positions. Used to identify unit imbalances from corporate actions, TIPS adjustments, paydown/payup issues.
+- account (VARCHAR): Portfolio identifier
+- security (VARCHAR): Security identifier  
+- period_start (DATE): Period start date
+- period_end (DATE): Period end date
+- beginning_units (DOUBLE): Beginning units balance
+- net_unit_flow (DOUBLE): Net unit flows during period
+- actual_ending_units (DOUBLE): Actual ending units
+- calculated_ending_units (DOUBLE): Calculated ending units
+- out_of_balance_units (DOUBLE): Units out of balance amount
+- Used for: Unit balance reconciliation, corporate action verification, TIPS processing validation
 
 IMPORTANT DATA HANDLING:
+- Most VARCHAR columns contain string data and require quoted values in WHERE clauses (e.g., WHERE TCODE = 'DIV')
+- Many numeric fields are stored as VARCHAR and may need CAST() for mathematical operations
+- Date fields vary: some are DATE type (period_start, period_end) others are VARCHAR (TDATE, ADATE, IDATE)
 - When you use execute_sql, you'll receive the first 10 rows maximum (even if more exist)
 - You can re-run the same or modified queries as many times as needed - don't refer back to previous results unless specifically helpful for comparison
 - The user will see the complete formatted results separately from your response
